@@ -1,0 +1,9 @@
+linux-xlnx
+.vscode
+**/*.cmd
+**/*.order
+**/*.mod
+**/*.ko
+**/*.o
+**/*.mod.c
+**/*.symvers
