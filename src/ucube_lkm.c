@@ -3,16 +3,21 @@
 #include <linux/kernel.h>
 #include <linux/fs.h>
 #include <linux/uaccess.h>
+#include <linux/types.h>
 #include <linux/cdev.h>
 #include <linux/slab.h>
 #include <linux/dma-mapping.h>
+#include <linux/vmalloc.h>
 
 #define MAX_DEVICES	1
+
+#define KERNEL_BUFFER_SIZE 1024*4
 /* Prototypes for device functions */
 static int ucube_lkm_open(struct inode *, struct file *);
 static int ucube_lkm_release(struct inode *, struct file *);
 static ssize_t ucube_lkm_read(struct file *, char *, size_t, loff_t *);
 static ssize_t ucube_lkm_write(struct file *, const char *, size_t, loff_t *);
+static int ucube_lkm_mmap(struct file *flip, struct vm_area_struct *vma);
 
 dev_t device_number;
 struct class *uCube_class;
@@ -24,7 +29,8 @@ const char *echo_msg = "TEST MESSAGE\n";
 struct uCube_device_data {
     struct device dev;
     struct cdev cdev;
-    unsigned int *dma_buffer;
+    u32 *read_data_buffer;
+    u32 *dma_buffer;
     dma_addr_t physaddr;
 };
 
@@ -36,12 +42,32 @@ static struct file_operations file_ops = {
     .read = ucube_lkm_read,
     .write = ucube_lkm_write,
     .open = ucube_lkm_open,
+    .mmap = ucube_lkm_mmap,
     .release = ucube_lkm_release
 };
 
 
+static int ucube_lkm_mmap(struct file *flip, struct vm_area_struct *vma) {
+    int rc;
+    struct page *page = NULL;
+    unsigned long size = (unsigned long)(vma->vm_end - vma->vm_start);
+
+    pr_info("%s: In mmap\n", __func__);
+
+    if (size > KERNEL_BUFFER_SIZE) {
+        return -EINVAL;  
+    } 
+
+    page = virt_to_page((unsigned long)dev_data->read_data_buffer + (vma->vm_pgoff << PAGE_SHIFT)); 
+    rc = remap_pfn_range(vma, vma->vm_start, page_to_pfn(page), size, vma->vm_page_prot);
+    
+    return rc;
+}
+
 static int ucube_lkm_open(struct inode *inode, struct file *file) {
+
     pr_info("%s: In open\n", __func__);
+
     return 0;
 }
 
@@ -114,8 +140,14 @@ static int __init ucube_lkm_init(void) {
     else {
         device_create(uCube_class, NULL, uCube_device, NULL, "uCube_dev_%d", 0);
     }
+    
+    /*SETUP AND ALLOCATE DMA BUFFER*/
     dma_set_coherent_mask(&dev_data->dev, DMA_BIT_MASK(32));
     dev_data->dma_buffer = dma_alloc_coherent(&dev_data->dev, 1024*sizeof(int), &(dev_data->physaddr), GFP_KERNEL ||GFP_ATOMIC);
+    
+    /*SETUP AND ALLOCATE DATA BUFFER*/
+    
+    dev_data->read_data_buffer = kmalloc(KERNEL_BUFFER_SIZE, GFP_KERNEL);
 
     pr_warn("%s: Allocated dma buffer at: %u\n", __func__, dev_data->physaddr);
     return rc;
@@ -127,6 +159,7 @@ static void __exit ucube_lkm_exit(void) {int i = 0;
 	dev_t my_device;
 	
     dma_free_coherent(&dev_data->dev,1024*sizeof(int),dev_data->dma_buffer, dev_data->physaddr);
+    vfree(dev_data->read_data_buffer);
 
     my_device = MKDEV(major, i);
     cdev_del(&dev_data->cdev);
