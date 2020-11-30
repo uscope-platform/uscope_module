@@ -8,10 +8,18 @@
 #include <linux/slab.h>
 #include <linux/dma-mapping.h>
 #include <linux/vmalloc.h>
+#include <linux/interrupt.h>
+#include <linux/platform_device.h>
+#include <linux/of.h>
+#include <linux/string.h>
+
 
 #define MAX_DEVICES	1
 
 #define KERNEL_BUFFER_SIZE 1024*4
+
+#define IRQ_NUMBER 22
+
 /* Prototypes for device functions */
 static int ucube_lkm_open(struct inode *, struct file *);
 static int ucube_lkm_release(struct inode *, struct file *);
@@ -19,11 +27,14 @@ static ssize_t ucube_lkm_read(struct file *, char *, size_t, loff_t *);
 static ssize_t ucube_lkm_write(struct file *, const char *, size_t, loff_t *);
 static int ucube_lkm_mmap(struct file *flip, struct vm_area_struct *vma);
 
+int ucube_lkm_probe(struct platform_device *dev);
+int ucube_lkm_remove(struct platform_device *dev)
+;
 dev_t device_number;
 struct class *uCube_class;
 struct uCube_device_data *dev_data;
 
-const char *echo_msg = "TEST MESSAGE\n";
+int irq_line;
 
 /* STRUCTURE FOR THE DEVICE SPECIFIC DATA*/
 struct uCube_device_data {
@@ -36,6 +47,22 @@ struct uCube_device_data {
 
 
 
+static struct of_device_id ucube_lkm_match_table[] = {
+     {.compatible = "ucube_lkm"},
+     {}
+};
+
+
+static struct platform_driver ucube_lkm_platform_driver = {
+        .probe = ucube_lkm_probe,
+        .remove = ucube_lkm_remove,
+        .driver = {
+                .name = "ucube_lkm",
+                .owner = THIS_MODULE,
+                .of_match_table = of_match_ptr(ucube_lkm_match_table),
+        },
+};
+
 
 /* This structure points to all of the device functions */
 static struct file_operations file_ops = {
@@ -45,6 +72,13 @@ static struct file_operations file_ops = {
     .mmap = ucube_lkm_mmap,
     .release = ucube_lkm_release
 };
+
+
+static irqreturn_t ucube_lkm_irq(int irq, void *dev_id)
+{
+    memcpy(dev_data->read_data_buffer, dev_data->dma_buffer, KERNEL_BUFFER_SIZE);
+    return IRQ_RETVAL(1);
+}
 
 
 static int ucube_lkm_mmap(struct file *flip, struct vm_area_struct *vma) {
@@ -124,7 +158,10 @@ static int __init ucube_lkm_init(void) {
     uCube_device = MKDEV(major, 0);
    
 
+    rc = platform_driver_probe(&ucube_lkm_platform_driver, ucube_lkm_probe);
+
     dev_data = kzalloc(sizeof(*dev_data), GFP_KERNEL);
+    
     dev_data->dev.devt = uCube_device;
     dev_data->dev.class = uCube_class;
     dev_data->dev.release = free_device_data;
@@ -144,34 +181,61 @@ static int __init ucube_lkm_init(void) {
     /*SETUP AND ALLOCATE DMA BUFFER*/
     dma_set_coherent_mask(&dev_data->dev, DMA_BIT_MASK(32));
     dev_data->dma_buffer = dma_alloc_coherent(&dev_data->dev, 1024*sizeof(int), &(dev_data->physaddr), GFP_KERNEL ||GFP_ATOMIC);
-    
-    /*SETUP AND ALLOCATE DATA BUFFER*/
-    
-    dev_data->read_data_buffer = kmalloc(KERNEL_BUFFER_SIZE, GFP_KERNEL);
-
     pr_warn("%s: Allocated dma buffer at: %u\n", __func__, dev_data->physaddr);
+    /*SETUP AND ALLOCATE DATA BUFFER*/
+    dev_data->read_data_buffer = kmalloc(KERNEL_BUFFER_SIZE, GFP_KERNEL);
+    
+    if (rc) {
+        pr_err("%s: Failed to initialize platform driver\nError:%d\n", __func__, rc);
+        return rc;
+    }
+    /* SETUP INTERRUPT HANDLER*/      
+    pr_warn("%s: setup interrupts\n", __func__);
+    rc = request_irq(irq_line, ucube_lkm_irq, 0, "ucube_lkm", NULL);
+    //pr_warn("%s: unassigned irqs: %lu\n", __func__, probe_irq_on());
+    
     return rc;
 }
 
 static void __exit ucube_lkm_exit(void) {int i = 0;
-
+	
 	int major = MAJOR(device_number);
 	dev_t my_device;
-	
+    
+    pr_info("%s: In exit\n", __func__);
+    free_irq(irq_line, NULL);
+
     dma_free_coherent(&dev_data->dev,1024*sizeof(int),dev_data->dma_buffer, dev_data->physaddr);
     vfree(dev_data->read_data_buffer);
-
+    
+    platform_driver_unregister(&ucube_lkm_platform_driver);	
+    
     my_device = MKDEV(major, i);
     cdev_del(&dev_data->cdev);
     device_destroy(uCube_class, my_device);
 
 	class_destroy(uCube_class);
 	unregister_chrdev_region(device_number, MAX_DEVICES);
-	pr_info("%s: In exit\n", __func__);
+    
+    
+    
 
 }
 
+int ucube_lkm_probe(struct platform_device *dev){
+    pr_info("%s: In platform probe\n", __func__);
 
+    irq_line = platform_get_irq(dev, 0);
+    return 0;
+}
+
+int ucube_lkm_remove(struct platform_device *dev){
+    pr_info("%s: In platform remove\n", __func__);
+    return 0;
+}
+
+
+MODULE_DEVICE_TABLE(of, ucube_lkm_match_table);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Filippo Savi");
 MODULE_DESCRIPTION("uScope dma handler");
