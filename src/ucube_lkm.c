@@ -12,24 +12,29 @@
 #include <linux/platform_device.h>
 #include <linux/of.h>
 #include <linux/string.h>
-
+#include <linux/types.h>
+#include <linux/poll.h>
 
 #define MAX_DEVICES	1
 
-#define KERNEL_BUFFER_SIZE 1024*4
+#define KERNEL_BUFFER_LENGTH 6144
+#define KERNEL_BUFFER_SIZE KERNEL_BUFFER_LENGTH*4
 
 #define IRQ_NUMBER 22
+
+#define IOCTL_NEW_DATA_AVAILABLE 1
 
 /* Prototypes for device functions */
 static int ucube_lkm_open(struct inode *, struct file *);
 static int ucube_lkm_release(struct inode *, struct file *);
 static ssize_t ucube_lkm_read(struct file *, char *, size_t, loff_t *);
 static ssize_t ucube_lkm_write(struct file *, const char *, size_t, loff_t *);
-static int ucube_lkm_mmap(struct file *flip, struct vm_area_struct *vma);
-
+static long ucube_lkm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
+__poll_t ucube_lkm_poll(struct file *, struct poll_table_struct *);
 int ucube_lkm_probe(struct platform_device *dev);
-int ucube_lkm_remove(struct platform_device *dev)
-;
+int ucube_lkm_remove(struct platform_device *dev);
+
+
 dev_t device_number;
 struct class *uCube_class;
 struct uCube_device_data *dev_data;
@@ -43,6 +48,7 @@ struct uCube_device_data {
     u32 *read_data_buffer;
     u32 *dma_buffer;
     dma_addr_t physaddr;
+    int new_data_available;
 };
 
 
@@ -69,7 +75,8 @@ static struct file_operations file_ops = {
     .read = ucube_lkm_read,
     .write = ucube_lkm_write,
     .open = ucube_lkm_open,
-    .mmap = ucube_lkm_mmap,
+    .unlocked_ioctl = ucube_lkm_ioctl,
+    .poll = ucube_lkm_poll,
     .release = ucube_lkm_release
 };
 
@@ -77,26 +84,28 @@ static struct file_operations file_ops = {
 static irqreturn_t ucube_lkm_irq(int irq, void *dev_id)
 {
     memcpy(dev_data->read_data_buffer, dev_data->dma_buffer, KERNEL_BUFFER_SIZE);
+    dev_data->new_data_available = 1;
     return IRQ_RETVAL(1);
 }
 
 
-static int ucube_lkm_mmap(struct file *flip, struct vm_area_struct *vma) {
-    int rc;
-    struct page *page = NULL;
-    unsigned long size = (unsigned long)(vma->vm_end - vma->vm_start);
-
-    pr_info("%s: In mmap\n", __func__);
-
-    if (size > KERNEL_BUFFER_SIZE) {
-        return -EINVAL;  
-    } 
-
-    page = virt_to_page((unsigned long)dev_data->read_data_buffer + (vma->vm_pgoff << PAGE_SHIFT)); 
-    rc = remap_pfn_range(vma, vma->vm_start, page_to_pfn(page), size, vma->vm_page_prot);
-    
-    return rc;
+__poll_t ucube_lkm_poll(struct file *flip , struct poll_table_struct * poll_struct){
+    return (POLLIN | POLLRDNORM);
 }
+
+static long ucube_lkm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
+    pr_info("%s: In ioctl\n CMD: %u\n ARG: %lu\n", __func__, cmd, arg);
+    switch (cmd){
+    case IOCTL_NEW_DATA_AVAILABLE:
+        return dev_data->new_data_available;
+        break;
+    default:
+        return -EINVAL;
+        break;
+    }
+    return 0;
+}              
+
 
 static int ucube_lkm_open(struct inode *inode, struct file *file) {
 
@@ -112,10 +121,20 @@ static int ucube_lkm_release(struct inode *inode, struct file *file) {
 
 static ssize_t ucube_lkm_read(struct file *flip, char *buffer, size_t count, loff_t *offset) {
 
-    pr_info("%s: In read\n", __func__);
-    pr_info("%s: dma buffer    %u\n", __func__, dev_data->dma_buffer[0]);
+    size_t datalen = KERNEL_BUFFER_SIZE;
 
+    pr_info("%s: In read\n", __func__);
+
+    if (count > datalen) {
+        count = datalen;
+    }
+
+    if (copy_to_user(buffer, dev_data->read_data_buffer, count)) {
+        return -EFAULT;
+    }
+    dev_data->new_data_available = 0;
     return count;
+
 }
 
 
@@ -161,7 +180,7 @@ static int __init ucube_lkm_init(void) {
     rc = platform_driver_probe(&ucube_lkm_platform_driver, ucube_lkm_probe);
 
     dev_data = kzalloc(sizeof(*dev_data), GFP_KERNEL);
-    
+    dev_data->new_data_available = 0;
     dev_data->dev.devt = uCube_device;
     dev_data->dev.class = uCube_class;
     dev_data->dev.release = free_device_data;
@@ -180,10 +199,10 @@ static int __init ucube_lkm_init(void) {
     
     /*SETUP AND ALLOCATE DMA BUFFER*/
     dma_set_coherent_mask(&dev_data->dev, DMA_BIT_MASK(32));
-    dev_data->dma_buffer = dma_alloc_coherent(&dev_data->dev, 1024*sizeof(int), &(dev_data->physaddr), GFP_KERNEL ||GFP_ATOMIC);
+    dev_data->dma_buffer = dma_alloc_coherent(&dev_data->dev, KERNEL_BUFFER_LENGTH*sizeof(int), &(dev_data->physaddr), GFP_KERNEL ||GFP_ATOMIC);
     pr_warn("%s: Allocated dma buffer at: %u\n", __func__, dev_data->physaddr);
     /*SETUP AND ALLOCATE DATA BUFFER*/
-    dev_data->read_data_buffer = kmalloc(KERNEL_BUFFER_SIZE, GFP_KERNEL);
+    dev_data->read_data_buffer = vmalloc(KERNEL_BUFFER_SIZE);
     
     if (rc) {
         pr_err("%s: Failed to initialize platform driver\nError:%d\n", __func__, rc);
@@ -205,7 +224,7 @@ static void __exit ucube_lkm_exit(void) {int i = 0;
     pr_info("%s: In exit\n", __func__);
     free_irq(irq_line, NULL);
 
-    dma_free_coherent(&dev_data->dev,1024*sizeof(int),dev_data->dma_buffer, dev_data->physaddr);
+    dma_free_coherent(&dev_data->dev,KERNEL_BUFFER_LENGTH*sizeof(int),dev_data->dma_buffer, dev_data->physaddr);
     vfree(dev_data->read_data_buffer);
     
     platform_driver_unregister(&ucube_lkm_platform_driver);	
