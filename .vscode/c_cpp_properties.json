@@ -1,0 +1,22 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/linux-xlnx/include/",
+                "${workspaceFolder}/linux-xlnx/arch/arm/include",
+                "${workspaceFolder}/linux-xlnx/arch/arm64/include",
+                "${workspaceFolder}/linux-xlnx/arch/riscv/include"
+            ],
+            "defines": [
+                "__GNUC__",
+                "__KERNEL__",
+                "MODULE"
+            ],
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "clang-x64"
+        }
+    ],
+    "version": 4
+}

@@ -1,5 +1,4 @@
 linux-xlnx
-.vscode
 **/*.cmd
 **/*.order
 **/*.mod
@@ -7,3 +6,4 @@ linux-xlnx
 **/*.o
 **/*.mod.c
 **/*.symvers
+.vscode-ctags
