@@ -1,0 +1,19 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../uscope_docker"
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"Depfile": "json",
+			"*.svh": "systemverilog",
+			"vmalloc.h": "c",
+			"dma-mapping.h": "c",
+			"scatterlist.h": "c"
+		}
+	}
+}
