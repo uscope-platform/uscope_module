@@ -24,12 +24,20 @@
 
 #define IOCTL_NEW_DATA_AVAILABLE 1
 
+#define BUS_0_ADDRESS_BASE 0x40000000
+#define BUS_0_ADDRESS_TOP 0x7fffffff
+
+#define BUS_1_ADDRESS_BASE 0x80000000
+#define BUS_1_ADDRESS_TOP 0xBfffffff
+
+
 /* Prototypes for device functions */
 static int ucube_lkm_open(struct inode *, struct file *);
 static int ucube_lkm_release(struct inode *, struct file *);
 static ssize_t ucube_lkm_read(struct file *, char *, size_t, loff_t *);
 static ssize_t ucube_lkm_write(struct file *, const char *, size_t, loff_t *);
 static long ucube_lkm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
+static int ucube_lkm_mmap(struct file *filp, struct vm_area_struct *vma);
 static __poll_t ucube_lkm_poll(struct file *, struct poll_table_struct *);
 int ucube_lkm_probe(struct platform_device *dev);
 int ucube_lkm_remove(struct platform_device *dev);
@@ -44,9 +52,7 @@ static int irq_line;
 /* STRUCTURE FOR THE DEVICE SPECIFIC DATA*/
 struct scope_device_data {
     struct device devs[3];
-
     struct cdev cdevs[3];
-
     u32 *read_data_buffer;
     u32 *dma_buffer;
     dma_addr_t physaddr;
@@ -81,22 +87,67 @@ static irqreturn_t ucube_lkm_irq(int irq, void *dev_id)
 
 
 static __poll_t ucube_lkm_poll(struct file *flip , struct poll_table_struct * poll_struct){
-    __poll_t mask = 0;
-    mask |= POLLIN | POLLRDNORM;
-    return mask;
-}
-
-static long ucube_lkm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
-    pr_info("%s: In ioctl\n CMD: %u\n ARG: %lu\n", __func__, cmd, arg);
-    switch (cmd){
-    case IOCTL_NEW_DATA_AVAILABLE:
-        return dev_data->new_data_available;
-        break;
-    default:
-        return -EINVAL;
-        break;
+    int minor = MINOR(flip->f_inode->i_rdev);
+    if(minor == 0){
+        __poll_t mask = 0;
+        mask |= POLLIN | POLLRDNORM;
+        return mask;
     }
     return 0;
+}
+
+
+static int ucube_lkm_mmap(struct file *filp, struct vm_area_struct *vma){
+
+    uint32_t mapping_start_address = vma->vm_pgoff*4096;
+    uint32_t mapping_stop_address = vma->vm_pgoff*4096+vma->vm_end - vma->vm_start;
+
+    int minor = MINOR(filp->f_inode->i_rdev);
+
+    switch (minor) {
+        case 0:
+            return -1;
+            pr_err("%s: mmapping of data memory is not supported\n", __func__);
+            break;
+        case 1:
+            if( mapping_start_address < BUS_0_ADDRESS_BASE || mapping_stop_address > BUS_0_ADDRESS_TOP){
+                pr_err("%s: mapping out of bus 0 address range\n", __func__);
+                return -2;
+            }
+                
+            break;
+        case 2:
+            if( mapping_start_address < BUS_1_ADDRESS_BASE || mapping_stop_address > BUS_1_ADDRESS_TOP)
+                pr_err("%s: mmapping out of bus 1 address range\n", __func__);
+                return -2;
+            break;
+    }
+
+    pr_warn("%s: In mmapped from %x to %x\n", __func__, mapping_start_address,mapping_stop_address);
+    if (remap_pfn_range(vma, vma->vm_start, vma->vm_pgoff,vma->vm_end - vma->vm_start,vma->vm_page_prot))
+    return -EAGAIN;
+    return 0;
+}
+
+
+
+static long ucube_lkm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
+    int minor = MINOR(filp->f_inode->i_rdev);
+    if(minor == 0){
+        pr_info("%s: In ioctl\n CMD: %u\n ARG: %lu\n", __func__, cmd, arg);
+        switch (cmd){
+        case IOCTL_NEW_DATA_AVAILABLE:
+            return dev_data->new_data_available;
+            break;
+        default:
+            return -EINVAL;
+            break;
+        }
+        return 0;
+    } else{
+        return 0;
+    }
+    
 }              
 
 
@@ -113,21 +164,23 @@ static int ucube_lkm_release(struct inode *inode, struct file *file) {
 }
 
 static ssize_t ucube_lkm_read(struct file *flip, char *buffer, size_t count, loff_t *offset) {
+    int minor = MINOR(flip->f_inode->i_rdev);
+    if(minor == 0){
+        size_t datalen = KERNEL_BUFFER_SIZE;
 
-    size_t datalen = KERNEL_BUFFER_SIZE;
+        pr_info("%s: In read\n", __func__);
 
-    pr_info("%s: In read\n", __func__);
+        if (count > datalen) {
+            count = datalen;
+        }
 
-    if (count > datalen) {
-        count = datalen;
+        if (copy_to_user(buffer, dev_data->read_data_buffer, count)) {
+            return -EFAULT;
+        }
+        dev_data->new_data_available = 0;
+        return count;    
     }
-
-    if (copy_to_user(buffer, dev_data->read_data_buffer, count)) {
-        return -EFAULT;
-    }
-    dev_data->new_data_available = 0;
-    return count;
-
+    return 0;
 }
 
 
@@ -154,8 +207,6 @@ static void free_device_data(struct device *d)
 }
 
 
-
-
 /* This structure points to all of the device functions */
 static struct file_operations file_ops = {
     .read = ucube_lkm_read,
@@ -163,7 +214,8 @@ static struct file_operations file_ops = {
     .open = ucube_lkm_open,
     .unlocked_ioctl = ucube_lkm_ioctl,
     .poll = ucube_lkm_poll,
-    .release = ucube_lkm_release
+    .release = ucube_lkm_release,
+    .mmap = ucube_lkm_mmap
 };
 
 
