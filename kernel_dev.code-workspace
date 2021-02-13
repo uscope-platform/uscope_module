@@ -13,7 +13,10 @@
 			"*.svh": "systemverilog",
 			"vmalloc.h": "c",
 			"dma-mapping.h": "c",
-			"scatterlist.h": "c"
+			"scatterlist.h": "c",
+			"platform_device.h": "c",
+			"of.h": "c",
+			"types.h": "c"
 		}
 	}
 }

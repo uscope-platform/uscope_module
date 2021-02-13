@@ -14,6 +14,7 @@
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/poll.h>
+#include <asm/io.h>
 
 #define N_MINOR_NUMBERS	3
 
@@ -123,6 +124,7 @@ static int ucube_lkm_mmap(struct file *filp, struct vm_area_struct *vma){
             break;
     }
 
+    vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
     pr_warn("%s: In mmapped from %x to %x\n", __func__, mapping_start_address,mapping_stop_address);
     if (remap_pfn_range(vma, vma->vm_start, vma->vm_pgoff,vma->vm_end - vma->vm_start,vma->vm_page_prot))
     return -EAGAIN;
