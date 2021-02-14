@@ -16,7 +16,8 @@
 			"scatterlist.h": "c",
 			"platform_device.h": "c",
 			"of.h": "c",
-			"types.h": "c"
+			"types.h": "c",
+			"pgtable-2level-types.h": "c"
 		}
 	}
 }

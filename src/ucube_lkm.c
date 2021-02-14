@@ -14,7 +14,8 @@
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/poll.h>
-#include <asm/io.h>
+#include <asm/pgtable.h>
+#include <asm/pgtable-2level-types.h> // SILENCE VSCODE ERROR
 
 #define N_MINOR_NUMBERS	3
 
