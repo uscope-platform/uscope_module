@@ -116,12 +116,12 @@ static int ucube_lkm_mmap(struct file *filp, struct vm_area_struct *vma){
                 pr_err("%s: mapping out of bus 0 address range\n", __func__);
                 return -2;
             }
-                
             break;
         case 2:
-            if( mapping_start_address < BUS_1_ADDRESS_BASE || mapping_stop_address > BUS_1_ADDRESS_TOP)
+            if( mapping_start_address < BUS_1_ADDRESS_BASE || mapping_stop_address > BUS_1_ADDRESS_TOP){
                 pr_err("%s: mmapping out of bus 1 address range\n", __func__);
                 return -2;
+            }
             break;
     }
 
