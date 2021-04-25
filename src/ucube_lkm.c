@@ -16,6 +16,8 @@
 #include <linux/poll.h>
 #include <asm/pgtable.h>
 #include <asm/pgtable-2level-types.h> // SILENCE VSCODE ERROR
+#include <linux/clk.h>
+#include <linux/device.h>
 
 #define N_MINOR_NUMBERS	3
 
@@ -32,6 +34,10 @@
 #define BUS_1_ADDRESS_BASE 0x80000000
 #define BUS_1_ADDRESS_TOP 0xBfffffff
 
+#define FCLK_0_DEFAULT_FREQ 100000000
+#define FCLK_1_DEFAULT_FREQ 40000000
+#define FCLK_2_DEFAULT_FREQ 40000000
+#define FCLK_3_DEFAULT_FREQ 40000000
 
 /* Prototypes for device functions */
 static int ucube_lkm_open(struct inode *, struct file *);
@@ -59,15 +65,81 @@ struct scope_device_data {
     u32 *dma_buffer;
     dma_addr_t physaddr;
     int new_data_available;
+    struct clk *fclk[4];
 };
 
 
+static ssize_t fclk_0_show(struct device *dev, struct device_attribute *mattr, char *data) {
+    unsigned long freq = clk_get_rate(dev_data->fclk[0]);
+    return sprintf(data, "%lu\n", freq);
+}
 
+static ssize_t fclk_1_show(struct device *dev, struct device_attribute *mattr, char *data) {
+    unsigned long freq = clk_get_rate(dev_data->fclk[1]);
+    return sprintf(data, "%lu\n", freq);
+}
+static ssize_t fclk_2_show(struct device *dev, struct device_attribute *mattr, char *data) {
+    unsigned long freq = clk_get_rate(dev_data->fclk[2]);
+    return sprintf(data, "%lu\n", freq);
+}
+static ssize_t fclk_3_show(struct device *dev, struct device_attribute *mattr, char *data) {
+    unsigned long freq = clk_get_rate(dev_data->fclk[3]);
+    return sprintf(data, "%lu\n", freq);
+}
+
+ssize_t fclk_0_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t len) {
+    unsigned long freq;
+    if(kstrtoul(buf, 0, &freq))
+		return -EINVAL;
+    clk_set_rate(dev_data->fclk[0], freq);
+    return len;
+}
+
+static ssize_t fclk_1_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t len) {
+    unsigned long freq;
+    if(kstrtoul(buf, 0, &freq))
+		return -EINVAL;
+    clk_set_rate(dev_data->fclk[1], freq);
+    return len;
+}
+
+static ssize_t fclk_2_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t len) {
+    unsigned long freq;
+    if(kstrtoul(buf, 0, &freq))
+		return -EINVAL;
+    clk_set_rate(dev_data->fclk[3], freq);
+    return len;
+}
+
+static ssize_t fclk_3_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t len) {
+    unsigned long freq;
+    if(kstrtoul(buf, 0, &freq))
+		return -EINVAL;
+    clk_set_rate(dev_data->fclk[3], freq);
+    return len;
+}
+
+static DEVICE_ATTR(fclk_0, S_IRUGO|S_IWUSR, fclk_0_show, fclk_0_store);
+static DEVICE_ATTR(fclk_1, S_IRUGO|S_IWUSR, fclk_1_show, fclk_1_store);
+static DEVICE_ATTR(fclk_2, S_IRUGO|S_IWUSR, fclk_2_show, fclk_2_store);
+static DEVICE_ATTR(fclk_3, S_IRUGO|S_IWUSR, fclk_3_show, fclk_3_store);
+
+
+static struct attribute *uscope_lkm_attrs[] = {
+	&dev_attr_fclk_0.attr,
+	&dev_attr_fclk_1.attr,
+	&dev_attr_fclk_2.attr,
+	&dev_attr_fclk_3.attr,
+	NULL,
+};
+
+const struct attribute_group uscope_lkm_attr_group = {
+	.attrs = uscope_lkm_attrs,
+};
 static struct of_device_id ucube_lkm_match_table[] = {
      {.compatible = "ucube_lkm"},
      {}
 };
-
 
 static struct platform_driver ucube_lkm_platform_driver = {
         .probe = ucube_lkm_probe,
@@ -223,7 +295,6 @@ static struct file_operations file_ops = {
 
 
 
-
 static int __init ucube_lkm_init(void) {
     int dev_rc, platform_rc, irq_rc;
     int major;
@@ -249,12 +320,6 @@ static int __init ucube_lkm_init(void) {
         devices[i] = MKDEV(major, i);
     }
 
-    platform_rc = platform_driver_probe(&ucube_lkm_platform_driver, ucube_lkm_probe);
-    if (platform_rc) {
-        pr_err("%s: Failed to initialize platform driver\nError:%d\n", __func__, platform_rc);
-        return platform_rc;
-    }
-
     dev_data = kzalloc(sizeof(*dev_data), GFP_KERNEL);
     dev_data->new_data_available = 0;
 
@@ -276,6 +341,13 @@ static int __init ucube_lkm_init(void) {
         pr_info("%s: finished setup for endpoint: %s\n", __func__, device_names[i]);
     }
     
+    /* SETUP PLATFORM DRIVER */
+    platform_rc = platform_driver_register(&ucube_lkm_platform_driver);
+    if (platform_rc) {
+        pr_err("%s: Failed to initialize platform driver\nError:%d\n", __func__, platform_rc);
+        return platform_rc;
+    }
+
     /*SETUP AND ALLOCATE DMA BUFFER*/
     dma_set_coherent_mask(&dev_data->devs[0], DMA_BIT_MASK(32));
     dev_data->dma_buffer = dma_alloc_coherent(&dev_data->devs[0], KERNEL_BUFFER_LENGTH*sizeof(int), &(dev_data->physaddr), GFP_KERNEL ||GFP_ATOMIC);
@@ -288,7 +360,7 @@ static int __init ucube_lkm_init(void) {
     pr_warn("%s: setup interrupts\n", __func__);
     irq_rc = request_irq(irq_line, ucube_lkm_irq, 0, "ucube_lkm", NULL);
     //pr_warn("%s: unassigned irqs: %lu\n", __func__, probe_irq_on());
-    
+
     return irq_rc;
 }
 
@@ -318,15 +390,37 @@ static void __exit ucube_lkm_exit(void) {
     
 }
 
-int ucube_lkm_probe(struct platform_device *dev){
+int ucube_lkm_probe(struct platform_device *pdev){
+    int rc;
     pr_info("%s: In platform probe\n", __func__);
+    
+    irq_line = platform_get_irq(pdev, 0);
 
-    irq_line = platform_get_irq(dev, 0);
+
+    rc = sysfs_create_group(&pdev->dev.kobj, &uscope_lkm_attr_group);
+
+    /* GET HANDLES TO CLOCK STRUCTURES */
+    dev_data->fclk[0] = devm_clk_get(&pdev->dev, "fclk0");
+    dev_data->fclk[1] = devm_clk_get(&pdev->dev, "fclk1");
+    dev_data->fclk[2] = devm_clk_get(&pdev->dev, "fclk2");
+    dev_data->fclk[3] = devm_clk_get(&pdev->dev, "fclk3");
+    clk_prepare_enable(dev_data->fclk[0]);
+    clk_prepare_enable(dev_data->fclk[1]);
+    clk_prepare_enable(dev_data->fclk[2]);
+    clk_prepare_enable(dev_data->fclk[3]);
+    
+    clk_set_rate(dev_data->fclk[0], FCLK_0_DEFAULT_FREQ);
+    clk_set_rate(dev_data->fclk[1], FCLK_1_DEFAULT_FREQ);
+    clk_set_rate(dev_data->fclk[2], FCLK_2_DEFAULT_FREQ);
+    clk_set_rate(dev_data->fclk[3], FCLK_3_DEFAULT_FREQ);
+
     return 0;
 }
 
-int ucube_lkm_remove(struct platform_device *dev){
+int ucube_lkm_remove(struct platform_device *pdev){
     pr_info("%s: In platform remove\n", __func__);
+    
+    sysfs_remove_group(&pdev->dev.kobj, &uscope_lkm_attr_group);
     return 0;
 }
 
