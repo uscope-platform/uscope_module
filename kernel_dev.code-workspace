@@ -4,7 +4,7 @@
 			"path": "."
 		},
 		{
-			"path": "../uscope_docker"
+			"path": "../uscope_server"
 		}
 	],
 	"settings": {
