@@ -31,7 +31,6 @@
 #include <linux/types.h>
 #include <linux/poll.h>
 #include <asm/pgtable.h>
-#include <asm/pgtable-2level-types.h> // SILENCE VSCODE ERROR
 #include <linux/clk.h>
 #include <linux/device.h>
 
