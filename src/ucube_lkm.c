@@ -346,9 +346,7 @@ static ssize_t ucube_lkm_read(struct file *flip, char *buffer, size_t count, lof
         unsigned long ret;
         if(!dev_data->is_zynqmp){
             ret = copy_to_user(buffer, dev_data->read_data_buffer_32, count);
-            pr_info("%s: In read 32\n", __func__);
         }else{
-            pr_info("%s: In read 64\n", __func__);
             ret = copy_to_user(buffer, dev_data->read_data_buffer_64, count);
         }
 
