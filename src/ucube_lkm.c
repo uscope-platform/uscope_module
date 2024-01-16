@@ -42,12 +42,22 @@
 #define IRQ_NUMBER 22
 
 #define IOCTL_NEW_DATA_AVAILABLE 1
+#define IOCTL_GET_BUFFER_ADDRESS 2
 
-#define BUS_0_ADDRESS_BASE 0x40000000
-#define BUS_0_ADDRESS_TOP 0x7fffffff
 
-#define BUS_1_ADDRESS_BASE 0x80000000
-#define BUS_1_ADDRESS_TOP 0xBfffffff
+#define ZYNQ_BUS_0_ADDRESS_BASE 0x40000000
+#define ZYNQ_BUS_0_ADDRESS_TOP 0x7fffffff
+
+#define ZYNQ_BUS_1_ADDRESS_BASE 0x80000000
+#define ZYNQ_BUS_1_ADDRESS_TOP 0xBfffffff
+
+#define ZYNQMP_BUS_0_ADDRESS_BASE 0x400000000
+#define ZYNQMP_BUS_0_ADDRESS_TOP  0x4FFFFFFFF
+
+#define ZYNQMP_BUS_1_ADDRESS_BASE 0x500000000
+#define ZYNQMP_BUS_1_ADDRESS_TOP  0x5FFFFFFFF
+
+
 
 #define FCLK_0_DEFAULT_FREQ 100000000
 #define FCLK_1_DEFAULT_FREQ 40000000
@@ -76,81 +86,126 @@ static int irq_line;
 struct scope_device_data {
     struct device devs[3];
     struct cdev cdevs[3];
-    u32 *read_data_buffer;
-    u32 *dma_buffer;
+    u32 *read_data_buffer_32;
+    u64 *read_data_buffer_64;
+    u32 *dma_buffer_32;
+    u64 *dma_buffer_64;
     dma_addr_t physaddr;
     int new_data_available;
     struct clk *fclk[4];
+    bool is_zynqmp;    
 };
 
 
 static ssize_t fclk_0_show(struct device *dev, struct device_attribute *mattr, char *data) {
-    unsigned long freq = clk_get_rate(dev_data->fclk[0]);
-    return sprintf(data, "%lu\n", freq);
+       if(!dev_data->is_zynqmp){
+        unsigned long freq = clk_get_rate(dev_data->fclk[0]);
+        return sprintf(data, "%lu\n", freq);
+    } else {
+        return 0;
+    }
 }
 
 static ssize_t fclk_1_show(struct device *dev, struct device_attribute *mattr, char *data) {
-    unsigned long freq = clk_get_rate(dev_data->fclk[1]);
-    return sprintf(data, "%lu\n", freq);
+    if(!dev_data->is_zynqmp){
+        unsigned long freq = clk_get_rate(dev_data->fclk[1]);
+        return sprintf(data, "%lu\n", freq);
+    } else {
+        return 0;
+    }
 }
 static ssize_t fclk_2_show(struct device *dev, struct device_attribute *mattr, char *data) {
-    unsigned long freq = clk_get_rate(dev_data->fclk[2]);
-    return sprintf(data, "%lu\n", freq);
+    if(!dev_data->is_zynqmp){
+        unsigned long freq = clk_get_rate(dev_data->fclk[2]);
+        return sprintf(data, "%lu\n", freq);
+    } else {
+        return 0;
+    }
 }
 static ssize_t fclk_3_show(struct device *dev, struct device_attribute *mattr, char *data) {
-    unsigned long freq = clk_get_rate(dev_data->fclk[3]);
-    return sprintf(data, "%lu\n", freq);
+    if(!dev_data->is_zynqmp){
+        unsigned long freq = clk_get_rate(dev_data->fclk[3]);
+        return sprintf(data, "%lu\n", freq);
+    } else {
+        return 0;
+    }
 }
 
 ssize_t fclk_0_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t len) {
-    unsigned long freq;
-    if(kstrtoul(buf, 0, &freq))
-		return -EINVAL;
-    clk_set_rate(dev_data->fclk[0], freq);
-    return len;
+    if(!dev_data->is_zynqmp){
+        unsigned long freq;
+        if(kstrtoul(buf, 0, &freq))
+            return -EINVAL;
+        clk_set_rate(dev_data->fclk[0], freq);
+        return len;
+    } else {
+        return 0;
+    }
 }
 
 static ssize_t fclk_1_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t len) {
-    unsigned long freq;
-    if(kstrtoul(buf, 0, &freq))
-		return -EINVAL;
-    clk_set_rate(dev_data->fclk[1], freq);
-    return len;
+    if(!dev_data->is_zynqmp){
+        unsigned long freq;
+        if(kstrtoul(buf, 0, &freq))
+            return -EINVAL;
+        clk_set_rate(dev_data->fclk[1], freq);
+        return len;
+    } else {
+        return 0;
+    }
 }
 
 static ssize_t fclk_2_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t len) {
-    unsigned long freq;
-    if(kstrtoul(buf, 0, &freq))
-		return -EINVAL;
-    clk_set_rate(dev_data->fclk[3], freq);
-    return len;
+    if(!dev_data->is_zynqmp){
+        unsigned long freq;
+        if(kstrtoul(buf, 0, &freq))
+            return -EINVAL;
+        clk_set_rate(dev_data->fclk[2], freq);
+        return len;
+    } else {
+        return 0;
+    }
 }
 
 static ssize_t fclk_3_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t len) {
-    unsigned long freq;
-    if(kstrtoul(buf, 0, &freq))
-		return -EINVAL;
-    clk_set_rate(dev_data->fclk[3], freq);
-    return len;
+    if(!dev_data->is_zynqmp){
+        unsigned long freq;
+        if(kstrtoul(buf, 0, &freq))
+            return -EINVAL;
+        clk_set_rate(dev_data->fclk[3], freq);
+        return len;
+    } else {
+        return 0;
+    }
+}
+
+static ssize_t dma_addr_show(struct device *dev, struct device_attribute *mattr, char *data) {
+    return sprintf(data, "%llu\n", dev_data->physaddr);
+}
+
+static ssize_t dma_addr_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t len) {
+    return 0;
 }
 
 static DEVICE_ATTR(fclk_0, S_IRUGO|S_IWUSR, fclk_0_show, fclk_0_store);
 static DEVICE_ATTR(fclk_1, S_IRUGO|S_IWUSR, fclk_1_show, fclk_1_store);
 static DEVICE_ATTR(fclk_2, S_IRUGO|S_IWUSR, fclk_2_show, fclk_2_store);
 static DEVICE_ATTR(fclk_3, S_IRUGO|S_IWUSR, fclk_3_show, fclk_3_store);
-
+static DEVICE_ATTR(dma_addr, S_IRUGO, dma_addr_show, dma_addr_store);
 
 static struct attribute *uscope_lkm_attrs[] = {
 	&dev_attr_fclk_0.attr,
 	&dev_attr_fclk_1.attr,
 	&dev_attr_fclk_2.attr,
 	&dev_attr_fclk_3.attr,
+	&dev_attr_dma_addr.attr,
 	NULL,
 };
 
 const struct attribute_group uscope_lkm_attr_group = {
 	.attrs = uscope_lkm_attrs,
 };
+
 static struct of_device_id ucube_lkm_match_table[] = {
      {.compatible = "ucube_lkm"},
      {}
@@ -167,9 +222,12 @@ static struct platform_driver ucube_lkm_platform_driver = {
 };
 
 
-static irqreturn_t ucube_lkm_irq(int irq, void *dev_id)
-{
-    memcpy(dev_data->read_data_buffer, dev_data->dma_buffer, KERNEL_BUFFER_SIZE);
+static irqreturn_t ucube_lkm_irq(int irq, void *dev_id)  {
+    if(!dev_data->is_zynqmp){
+        memcpy(dev_data->read_data_buffer_32, dev_data->dma_buffer_32, KERNEL_BUFFER_SIZE);
+    }else{
+        memcpy(dev_data->read_data_buffer_64, dev_data->dma_buffer_64, KERNEL_BUFFER_SIZE);
+    }
     dev_data->new_data_available = 1;
     return IRQ_RETVAL(1);
 }
@@ -187,35 +245,57 @@ static __poll_t ucube_lkm_poll(struct file *flip , struct poll_table_struct * po
 
 
 static int ucube_lkm_mmap(struct file *filp, struct vm_area_struct *vma){
-
-    uint32_t mapping_start_address = vma->vm_pgoff*4096;
-    uint32_t mapping_stop_address = vma->vm_pgoff*4096+vma->vm_end - vma->vm_start;
+    uint64_t mapping_start_address = vma->vm_pgoff << PAGE_SHIFT;
+    uint32_t mapping_size = vma->vm_end - vma->vm_start;
+    uint64_t mapping_stop_address = mapping_start_address +  mapping_size;
 
     int minor = MINOR(filp->f_inode->i_rdev);
+    uint64_t mapping_limit_base_0, mapping_limit_top_0;
+    uint64_t mapping_limit_base_1, mapping_limit_top_1;
 
+    if(dev_data->is_zynqmp){
+        mapping_limit_base_0 = ZYNQMP_BUS_0_ADDRESS_BASE;
+        mapping_limit_top_0 = ZYNQMP_BUS_0_ADDRESS_TOP;
+        mapping_limit_base_1 = ZYNQMP_BUS_1_ADDRESS_BASE;
+        mapping_limit_top_1 = ZYNQMP_BUS_1_ADDRESS_TOP;
+    } else {
+        mapping_limit_base_0 = ZYNQ_BUS_0_ADDRESS_BASE;
+        mapping_limit_top_0 = ZYNQ_BUS_0_ADDRESS_TOP;
+        mapping_limit_base_1 = ZYNQ_BUS_1_ADDRESS_BASE;
+        mapping_limit_top_1 = ZYNQ_BUS_1_ADDRESS_TOP;
+    }
     switch (minor) {
         case 0:
             return -1;
             pr_err("%s: mmapping of data memory is not supported\n", __func__);
             break;
         case 1:
-            if( mapping_start_address < BUS_0_ADDRESS_BASE || mapping_stop_address > BUS_0_ADDRESS_TOP){
-                pr_err("%s: mapping out of bus 0 address range\n", __func__);
+            if( mapping_start_address < mapping_limit_base_0 ){
+                pr_err("%s: attempting to map memory below the control bus address range (%x)\n", __func__, mapping_start_address);
+                return -2;
+            }
+            if( mapping_stop_address > mapping_limit_top_0){
+                pr_err("%s: attempting to map memory above the control bus address range (%x)\n", __func__, mapping_stop_address);
                 return -2;
             }
             break;
         case 2:
-            if( mapping_start_address < BUS_1_ADDRESS_BASE || mapping_stop_address > BUS_1_ADDRESS_TOP){
-                pr_err("%s: mmapping out of bus 1 address range\n", __func__);
+            if( mapping_start_address < mapping_limit_base_1 ){
+                pr_err("%s: attempting to map memory below the core bus address range (%x)\n", __func__, mapping_start_address);
+                return -2;
+            }
+            if( mapping_stop_address > mapping_limit_top_1){
+                pr_err("%s: attempting to map memory above the core bus address range (%x)\n", __func__, mapping_stop_address);
                 return -2;
             }
             break;
     }
 
     vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
-    pr_warn("%s: In mmapped from %x to %x\n", __func__, mapping_start_address,mapping_stop_address);
-    if (remap_pfn_range(vma, vma->vm_start, vma->vm_pgoff,vma->vm_end - vma->vm_start,vma->vm_page_prot))
+    if (remap_pfn_range(vma, vma->vm_start, vma->vm_pgoff, mapping_size ,vma->vm_page_prot))
     return -EAGAIN;
+
+    pr_info("%s: Mapped emmory from %llx to %llx\n", __func__, mapping_start_address, mapping_stop_address);
     return 0;
 }
 
@@ -258,13 +338,21 @@ static ssize_t ucube_lkm_read(struct file *flip, char *buffer, size_t count, lof
     if(minor == 0){
         size_t datalen = KERNEL_BUFFER_SIZE;
 
-        pr_info("%s: In read\n", __func__);
 
         if (count > datalen) {
             count = datalen;
         }
 
-        if (copy_to_user(buffer, dev_data->read_data_buffer, count)) {
+        unsigned long ret;
+        if(!dev_data->is_zynqmp){
+            ret = copy_to_user(buffer, dev_data->read_data_buffer_32, count);
+            pr_info("%s: In read 32\n", __func__);
+        }else{
+            pr_info("%s: In read 64\n", __func__);
+            ret = copy_to_user(buffer, dev_data->read_data_buffer_64, count);
+        }
+
+        if(ret) {
             return -EFAULT;
         }
         dev_data->new_data_available = 0;
@@ -364,12 +452,34 @@ static int __init ucube_lkm_init(void) {
     }
 
     /*SETUP AND ALLOCATE DMA BUFFER*/
-    dma_set_coherent_mask(&dev_data->devs[0], DMA_BIT_MASK(32));
-    dev_data->dma_buffer = dma_alloc_coherent(&dev_data->devs[0], KERNEL_BUFFER_LENGTH*sizeof(int), &(dev_data->physaddr), GFP_KERNEL ||GFP_ATOMIC);
-    pr_warn("%s: Allocated dma buffer at: %u\n", __func__, dev_data->physaddr);
-    /*SETUP AND ALLOCATE DATA BUFFER*/
-    dev_data->read_data_buffer = vmalloc(KERNEL_BUFFER_SIZE);
+    if(!dev_data->is_zynqmp){
+        dma_set_coherent_mask(&dev_data->devs[0], DMA_BIT_MASK(32));
+        dev_data->dma_buffer_32 = dma_alloc_coherent(
+            &dev_data->devs[0],
+            KERNEL_BUFFER_LENGTH*sizeof(u32),
+            &(dev_data->physaddr),
+            GFP_KERNEL ||GFP_ATOMIC
+        );
+       pr_warn("%s: Allocated 32 bit dma buffer at: %u\n", __func__, dev_data->physaddr);
+    }else{
+        dma_set_coherent_mask(&dev_data->devs[0], DMA_BIT_MASK(64));
+        dev_data->dma_buffer_64 = dma_alloc_coherent(
+            &dev_data->devs[0],
+            KERNEL_BUFFER_LENGTH*sizeof(u64),
+            &(dev_data->physaddr),
+            GFP_KERNEL ||GFP_ATOMIC
+        );
+        pr_warn("%s: Allocated 64 bit dma buffer at: %u\n", __func__, dev_data->physaddr);
+    }
     
+    
+    /*SETUP AND ALLOCATE DATA BUFFER*/
+
+    if(!dev_data->is_zynqmp){
+        dev_data->read_data_buffer_32 = vmalloc(KERNEL_BUFFER_SIZE);
+    } else{
+        dev_data->read_data_buffer_64 = vmalloc(KERNEL_BUFFER_SIZE);
+    }
 
     /* SETUP INTERRUPT HANDLER*/      
     pr_warn("%s: setup interrupts\n", __func__);
@@ -386,8 +496,25 @@ static void __exit ucube_lkm_exit(void) {
     pr_info("%s: In exit\n", __func__);
     free_irq(irq_line, NULL);
 
-    dma_free_coherent(&dev_data->devs[0],KERNEL_BUFFER_LENGTH*sizeof(int),dev_data->dma_buffer, dev_data->physaddr);
-    vfree(dev_data->read_data_buffer);
+    if(!dev_data->is_zynqmp){
+        dma_free_coherent(
+            &dev_data->devs[0],
+            KERNEL_BUFFER_LENGTH*sizeof(u32),
+            dev_data->dma_buffer_32,
+            dev_data->physaddr
+        );
+        vfree(dev_data->read_data_buffer_32);
+    } else{
+        dma_free_coherent(
+            &dev_data->devs[0],
+            KERNEL_BUFFER_LENGTH*sizeof(u64),
+            dev_data->dma_buffer_64,
+            dev_data->physaddr
+        );
+        vfree(dev_data->read_data_buffer_64);
+    }
+
+    
     
     platform_driver_unregister(&ucube_lkm_platform_driver);	
     
@@ -407,34 +534,42 @@ static void __exit ucube_lkm_exit(void) {
 
 int ucube_lkm_probe(struct platform_device *pdev){
     int rc;
+	char const * driver_mode;
+
     pr_info("%s: In platform probe\n", __func__);
     
     irq_line = platform_get_irq(pdev, 0);
 
+    of_property_read_string(pdev->dev.of_node, "ucubever", &driver_mode);
+
+    pr_info("%s: driver target is %s\n", __func__, driver_mode);
+    dev_data->is_zynqmp = strncmp(driver_mode, "zynqmp", 6)==0;
+
+
 
     rc = sysfs_create_group(&pdev->dev.kobj, &uscope_lkm_attr_group);
-
-    /* GET HANDLES TO CLOCK STRUCTURES */
-    dev_data->fclk[0] = devm_clk_get(&pdev->dev, "fclk0");
-    dev_data->fclk[1] = devm_clk_get(&pdev->dev, "fclk1");
-    dev_data->fclk[2] = devm_clk_get(&pdev->dev, "fclk2");
-    dev_data->fclk[3] = devm_clk_get(&pdev->dev, "fclk3");
-    clk_prepare_enable(dev_data->fclk[0]);
-    clk_prepare_enable(dev_data->fclk[1]);
-    clk_prepare_enable(dev_data->fclk[2]);
-    clk_prepare_enable(dev_data->fclk[3]);
-    
-    clk_set_rate(dev_data->fclk[0], FCLK_0_DEFAULT_FREQ);
-    clk_set_rate(dev_data->fclk[1], FCLK_1_DEFAULT_FREQ);
-    clk_set_rate(dev_data->fclk[2], FCLK_2_DEFAULT_FREQ);
-    clk_set_rate(dev_data->fclk[3], FCLK_3_DEFAULT_FREQ);
+    if(!dev_data->is_zynqmp){
+        /* GET HANDLES TO CLOCK STRUCTURES */
+        dev_data->fclk[0] = devm_clk_get(&pdev->dev, "fclk0");
+        dev_data->fclk[1] = devm_clk_get(&pdev->dev, "fclk1");
+        dev_data->fclk[2] = devm_clk_get(&pdev->dev, "fclk2");
+        dev_data->fclk[3] = devm_clk_get(&pdev->dev, "fclk3");
+        clk_prepare_enable(dev_data->fclk[0]);
+        clk_prepare_enable(dev_data->fclk[1]);
+        clk_prepare_enable(dev_data->fclk[2]);
+        clk_prepare_enable(dev_data->fclk[3]);
+        
+        clk_set_rate(dev_data->fclk[0], FCLK_0_DEFAULT_FREQ);
+        clk_set_rate(dev_data->fclk[1], FCLK_1_DEFAULT_FREQ);
+        clk_set_rate(dev_data->fclk[2], FCLK_2_DEFAULT_FREQ);
+        clk_set_rate(dev_data->fclk[3], FCLK_3_DEFAULT_FREQ);
+    }
 
     return 0;
 }
 
 int ucube_lkm_remove(struct platform_device *pdev){
     pr_info("%s: In platform remove\n", __func__);
-    
     sysfs_remove_group(&pdev->dev.kobj, &uscope_lkm_attr_group);
     return 0;
 }
