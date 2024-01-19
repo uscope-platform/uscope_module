@@ -36,8 +36,9 @@
 
 #define N_MINOR_NUMBERS	3
 
-#define KERNEL_BUFFER_LENGTH 6144
-#define KERNEL_BUFFER_SIZE KERNEL_BUFFER_LENGTH*4
+#define N_SCOPE_CHANNELS 6
+#define KERNEL_BUFFER_LENGTH N_SCOPE_CHANNELS*1024
+
 
 #define IRQ_NUMBER 22
 
@@ -93,7 +94,8 @@ struct scope_device_data {
     dma_addr_t physaddr;
     int new_data_available;
     struct clk *fclk[4];
-    bool is_zynqmp;    
+    bool is_zynqmp;
+    u32 dma_buf_size;
 };
 
 
@@ -105,7 +107,6 @@ static ssize_t fclk_0_show(struct device *dev, struct device_attribute *mattr, c
         return 0;
     }
 }
-
 static ssize_t fclk_1_show(struct device *dev, struct device_attribute *mattr, char *data) {
     if(!dev_data->is_zynqmp){
         unsigned long freq = clk_get_rate(dev_data->fclk[1]);
@@ -184,7 +185,64 @@ static ssize_t dma_addr_show(struct device *dev, struct device_attribute *mattr,
 }
 
 static ssize_t dma_addr_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t len) {
-    return 0;
+        return 0;
+}
+
+
+static ssize_t dma_buf_size_show(struct device *dev, struct device_attribute *mattr, char *data) {
+    return sprintf(data, "%u\n", dev_data->dma_buf_size);
+}
+
+static ssize_t dma_buf_size_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t len) {
+    unsigned long size;
+    if(kstrtoul(buf, 0, &size))
+        return -EINVAL;
+    
+    pr_info("%s: Requested buffer size: %u\n", __func__, buf);
+    
+    u64 prev_size = dev_data->dma_buf_size;
+
+    dev_data->dma_buf_size = size;
+        
+    if(!dev_data->is_zynqmp){
+        dma_free_coherent(
+            &dev_data->devs[0],
+            prev_size,
+            dev_data->dma_buffer_32,
+            dev_data->physaddr
+        );
+
+        dev_data->dma_buffer_32 = dma_alloc_coherent(
+            &dev_data->devs[0],
+            dev_data->dma_buf_size,
+            &(dev_data->physaddr),
+            GFP_KERNEL ||GFP_ATOMIC
+        );
+
+
+        vfree(dev_data->read_data_buffer_32);
+        dev_data->read_data_buffer_32 = vmalloc(dev_data->dma_buf_size);
+    } else{
+
+        dma_free_coherent(
+            &dev_data->devs[0],
+            prev_size,
+            dev_data->dma_buffer_64,
+            dev_data->physaddr
+        );
+
+        dev_data->dma_buffer_64 = dma_alloc_coherent(
+            &dev_data->devs[0],
+            dev_data->dma_buf_size,
+            &(dev_data->physaddr),
+            GFP_KERNEL ||GFP_ATOMIC
+        );
+
+        vfree(dev_data->read_data_buffer_64);
+        dev_data->read_data_buffer_64 = vmalloc(dev_data->dma_buf_size);
+    }
+
+    return len;
 }
 
 static DEVICE_ATTR(fclk_0, S_IRUGO|S_IWUSR, fclk_0_show, fclk_0_store);
@@ -192,6 +250,7 @@ static DEVICE_ATTR(fclk_1, S_IRUGO|S_IWUSR, fclk_1_show, fclk_1_store);
 static DEVICE_ATTR(fclk_2, S_IRUGO|S_IWUSR, fclk_2_show, fclk_2_store);
 static DEVICE_ATTR(fclk_3, S_IRUGO|S_IWUSR, fclk_3_show, fclk_3_store);
 static DEVICE_ATTR(dma_addr, S_IRUGO, dma_addr_show, dma_addr_store);
+static DEVICE_ATTR(dma_buf_size, S_IRUGO|S_IWUSR, dma_buf_size_show, dma_buf_size_store);
 
 static struct attribute *uscope_lkm_attrs[] = {
 	&dev_attr_fclk_0.attr,
@@ -199,6 +258,7 @@ static struct attribute *uscope_lkm_attrs[] = {
 	&dev_attr_fclk_2.attr,
 	&dev_attr_fclk_3.attr,
 	&dev_attr_dma_addr.attr,
+	&dev_attr_dma_buf_size.attr,
 	NULL,
 };
 
@@ -224,9 +284,9 @@ static struct platform_driver ucube_lkm_platform_driver = {
 
 static irqreturn_t ucube_lkm_irq(int irq, void *dev_id)  {
     if(!dev_data->is_zynqmp){
-        memcpy(dev_data->read_data_buffer_32, dev_data->dma_buffer_32, KERNEL_BUFFER_SIZE);
+        memcpy(dev_data->read_data_buffer_32, dev_data->dma_buffer_32, dev_data->dma_buf_size);
     }else{
-        memcpy(dev_data->read_data_buffer_64, dev_data->dma_buffer_64, KERNEL_BUFFER_SIZE);
+        memcpy(dev_data->read_data_buffer_64, dev_data->dma_buffer_64, dev_data->dma_buf_size);
     }
     dev_data->new_data_available = 1;
     return IRQ_RETVAL(1);
@@ -336,7 +396,7 @@ static int ucube_lkm_release(struct inode *inode, struct file *file) {
 static ssize_t ucube_lkm_read(struct file *flip, char *buffer, size_t count, loff_t *offset) {
     int minor = MINOR(flip->f_inode->i_rdev);
     if(minor == 0){
-        size_t datalen = KERNEL_BUFFER_SIZE;
+        size_t datalen = dev_data->dma_buf_size;
 
 
         if (count > datalen) {
@@ -449,21 +509,24 @@ static int __init ucube_lkm_init(void) {
         return platform_rc;
     }
 
+
     /*SETUP AND ALLOCATE DMA BUFFER*/
     if(!dev_data->is_zynqmp){
+        dev_data->dma_buf_size = KERNEL_BUFFER_LENGTH*sizeof(u32);
         dma_set_coherent_mask(&dev_data->devs[0], DMA_BIT_MASK(32));
         dev_data->dma_buffer_32 = dma_alloc_coherent(
             &dev_data->devs[0],
-            KERNEL_BUFFER_LENGTH*sizeof(u32),
+            dev_data->dma_buf_size,
             &(dev_data->physaddr),
             GFP_KERNEL ||GFP_ATOMIC
         );
        pr_warn("%s: Allocated 32 bit dma buffer at: %u\n", __func__, dev_data->physaddr);
     }else{
+        dev_data->dma_buf_size = KERNEL_BUFFER_LENGTH*sizeof(u64);
         dma_set_coherent_mask(&dev_data->devs[0], DMA_BIT_MASK(64));
         dev_data->dma_buffer_64 = dma_alloc_coherent(
             &dev_data->devs[0],
-            KERNEL_BUFFER_LENGTH*sizeof(u64),
+            dev_data->dma_buf_size,
             &(dev_data->physaddr),
             GFP_KERNEL ||GFP_ATOMIC
         );
@@ -474,9 +537,9 @@ static int __init ucube_lkm_init(void) {
     /*SETUP AND ALLOCATE DATA BUFFER*/
 
     if(!dev_data->is_zynqmp){
-        dev_data->read_data_buffer_32 = vmalloc(KERNEL_BUFFER_SIZE);
+        dev_data->read_data_buffer_32 = vmalloc(dev_data->dma_buf_size);
     } else{
-        dev_data->read_data_buffer_64 = vmalloc(KERNEL_BUFFER_SIZE);
+        dev_data->read_data_buffer_64 = vmalloc(dev_data->dma_buf_size);
     }
 
     /* SETUP INTERRUPT HANDLER*/      
@@ -497,7 +560,7 @@ static void __exit ucube_lkm_exit(void) {
     if(!dev_data->is_zynqmp){
         dma_free_coherent(
             &dev_data->devs[0],
-            KERNEL_BUFFER_LENGTH*sizeof(u32),
+            dev_data->dma_buf_size,
             dev_data->dma_buffer_32,
             dev_data->physaddr
         );
@@ -505,7 +568,7 @@ static void __exit ucube_lkm_exit(void) {
     } else{
         dma_free_coherent(
             &dev_data->devs[0],
-            KERNEL_BUFFER_LENGTH*sizeof(u64),
+            dev_data->dma_buf_size,
             dev_data->dma_buffer_64,
             dev_data->physaddr
         );
