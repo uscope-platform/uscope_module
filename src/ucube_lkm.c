@@ -37,7 +37,7 @@
 #define N_MINOR_NUMBERS	3
 
 #define N_SCOPE_CHANNELS 6
-#define KERNEL_BUFFER_LENGTH N_SCOPE_CHANNELS*1024
+#define KERNEL_BUFFER_LENGTH N_SCOPE_CHANNELS*1024*sizeof(u64)
 
 
 #define IRQ_NUMBER 22
@@ -181,7 +181,14 @@ static ssize_t fclk_3_store(struct device *dev, struct device_attribute *attr, c
 }
 
 static ssize_t dma_addr_show(struct device *dev, struct device_attribute *mattr, char *data) {
+    #if defined(__arm__)
+    return sprintf(data, "%lu\n", dev_data->physaddr);
+    #elif defined(__aarch64__)
     return sprintf(data, "%llu\n", dev_data->physaddr);
+    #else
+    printk(KERN_ALERT "Hello, kernel. Unknown mode!\n");
+    return 0
+    #endif
 }
 
 static ssize_t dma_addr_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t len) {
@@ -509,10 +516,9 @@ static int __init ucube_lkm_init(void) {
         return platform_rc;
     }
 
-
+    dev_data->dma_buf_size = KERNEL_BUFFER_LENGTH;
     /*SETUP AND ALLOCATE DMA BUFFER*/
     if(!dev_data->is_zynqmp){
-        dev_data->dma_buf_size = KERNEL_BUFFER_LENGTH*sizeof(u32);
         dma_set_coherent_mask(&dev_data->devs[0], DMA_BIT_MASK(32));
         dev_data->dma_buffer_32 = dma_alloc_coherent(
             &dev_data->devs[0],
@@ -522,7 +528,6 @@ static int __init ucube_lkm_init(void) {
         );
        pr_warn("%s: Allocated 32 bit dma buffer at: %u\n", __func__, dev_data->physaddr);
     }else{
-        dev_data->dma_buf_size = KERNEL_BUFFER_LENGTH*sizeof(u64);
         dma_set_coherent_mask(&dev_data->devs[0], DMA_BIT_MASK(64));
         dev_data->dma_buffer_64 = dma_alloc_coherent(
             &dev_data->devs[0],
