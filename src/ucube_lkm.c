@@ -34,7 +34,7 @@
 #include <linux/clk.h>
 #include <linux/device.h>
 
-#define N_MINOR_NUMBERS	3
+#define N_MINOR_NUMBERS	4
 
 #define N_SCOPE_CHANNELS 6
 #define KERNEL_BUFFER_LENGTH N_SCOPE_CHANNELS*1024*sizeof(u64)
@@ -85,8 +85,8 @@ static int irq_line;
 
 /* STRUCTURE FOR THE DEVICE SPECIFIC DATA*/
 struct scope_device_data {
-    struct device devs[3];
-    struct cdev cdevs[3];
+    struct device devs[N_MINOR_NUMBERS];
+    struct cdev cdevs[N_MINOR_NUMBERS];
     u32 *read_data_buffer_32;
     u64 *read_data_buffer_64;
     u32 *dma_buffer_32;
@@ -100,7 +100,7 @@ struct scope_device_data {
 
 
 static ssize_t fclk_0_show(struct device *dev, struct device_attribute *mattr, char *data) {
-       if(!dev_data->is_zynqmp){
+    if(!dev_data->is_zynqmp){
         unsigned long freq = clk_get_rate(dev_data->fclk[0]);
         return sprintf(data, "%lu\n", freq);
     } else {
@@ -202,12 +202,13 @@ static ssize_t dma_buf_size_show(struct device *dev, struct device_attribute *ma
 
 static ssize_t dma_buf_size_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t len) {
     unsigned long size;
+    u64 prev_size;
     if(kstrtoul(buf, 0, &size))
         return -EINVAL;
     
-    pr_info("%s: Requested buffer size: %u\n", __func__, buf);
+    pr_info("%s: Requested buffer size: %s\n", __func__, buf);
     
-    u64 prev_size = dev_data->dma_buf_size;
+    prev_size = dev_data->dma_buf_size;
 
     dev_data->dma_buf_size = size;
         
@@ -338,21 +339,21 @@ static int ucube_lkm_mmap(struct file *filp, struct vm_area_struct *vma){
             break;
         case 1:
             if( mapping_start_address < mapping_limit_base_0 ){
-                pr_err("%s: attempting to map memory below the control bus address range (%x)\n", __func__, mapping_start_address);
+                pr_err("%s: attempting to map memory below the control bus address range (%llx)\n", __func__, mapping_start_address);
                 return -2;
             }
             if( mapping_stop_address > mapping_limit_top_0){
-                pr_err("%s: attempting to map memory above the control bus address range (%x)\n", __func__, mapping_stop_address);
+                pr_err("%s: attempting to map memory above the control bus address range (%llx)\n", __func__, mapping_stop_address);
                 return -2;
             }
             break;
         case 2:
             if( mapping_start_address < mapping_limit_base_1 ){
-                pr_err("%s: attempting to map memory below the core bus address range (%x)\n", __func__, mapping_start_address);
+                pr_err("%s: attempting to map memory below the core bus address range (%llx)\n", __func__, mapping_start_address);
                 return -2;
             }
             if( mapping_stop_address > mapping_limit_top_1){
-                pr_err("%s: attempting to map memory above the core bus address range (%x)\n", __func__, mapping_stop_address);
+                pr_err("%s: attempting to map memory above the core bus address range (%llx)\n", __func__, mapping_stop_address);
                 return -2;
             }
             break;
@@ -401,16 +402,17 @@ static int ucube_lkm_release(struct inode *inode, struct file *file) {
 }
 
 static ssize_t ucube_lkm_read(struct file *flip, char *buffer, size_t count, loff_t *offset) {
+    size_t datalen;
+    unsigned long ret;
     int minor = MINOR(flip->f_inode->i_rdev);
     if(minor == 0){
-        size_t datalen = dev_data->dma_buf_size;
+        datalen = dev_data->dma_buf_size;
 
 
         if (count > datalen) {
             count = datalen;
         }
 
-        unsigned long ret;
         if(!dev_data->is_zynqmp){
             ret = copy_to_user(buffer, dev_data->read_data_buffer_32, count);
         }else{
@@ -466,12 +468,12 @@ static struct file_operations file_ops = {
 static int __init ucube_lkm_init(void) {
     int dev_rc, platform_rc, irq_rc;
     int major;
-    int cdev_rcs[3];
-    dev_t devices[3];
-    const char* const device_names[] = { "uscope_data", "uscope_BUS_0", "uscope_BUS_1"}; 
+    int cdev_rcs[N_MINOR_NUMBERS];
+    dev_t devices[N_MINOR_NUMBERS];
+    const char* const device_names[] = { "uscope_data", "uscope_BUS_0", "uscope_BUS_1", "uscope_bitstream"}; 
     
     /* DYNAMICALLY ALLOCATE DEVICE NUMBERS, CLASSES, ETC.*/
-    pr_info("%s: In init\n", __func__);\
+    pr_info("%s: In init\n", __func__);
 
     dev_rc = alloc_chrdev_region(&device_number, 0, N_MINOR_NUMBERS,"uCube DMA");
     
@@ -526,7 +528,7 @@ static int __init ucube_lkm_init(void) {
             &(dev_data->physaddr),
             GFP_KERNEL ||GFP_ATOMIC
         );
-       pr_warn("%s: Allocated 32 bit dma buffer at: %u\n", __func__, dev_data->physaddr);
+       pr_warn("%s: Allocated 32 bit dma buffer at: %llu\n", __func__, dev_data->physaddr);
     }else{
         dma_set_coherent_mask(&dev_data->devs[0], DMA_BIT_MASK(64));
         dev_data->dma_buffer_64 = dma_alloc_coherent(
@@ -535,7 +537,7 @@ static int __init ucube_lkm_init(void) {
             &(dev_data->physaddr),
             GFP_KERNEL ||GFP_ATOMIC
         );
-        pr_warn("%s: Allocated 64 bit dma buffer at: %u\n", __func__, dev_data->physaddr);
+        pr_warn("%s: Allocated 64 bit dma buffer at: %llu\n", __func__, dev_data->physaddr);
     }
     
     
