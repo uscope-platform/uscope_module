@@ -33,17 +33,21 @@
 #include <asm/pgtable.h>
 #include <linux/clk.h>
 #include <linux/device.h>
+#include <linux/fpga/fpga-mgr.h>
+#include <linux/fpga/fpga-region.h>
 
 #define N_MINOR_NUMBERS	4
 
 #define N_SCOPE_CHANNELS 6
 #define KERNEL_BUFFER_LENGTH N_SCOPE_CHANNELS*1024*sizeof(u64)
+#define BITSTREAM_BUFFER_SIZE 32000000
 
 
 #define IRQ_NUMBER 22
 
 #define IOCTL_NEW_DATA_AVAILABLE 1
 #define IOCTL_GET_BUFFER_ADDRESS 2
+#define IOCTL_PROGRAM_FPGA 3
 
 
 #define ZYNQ_BUS_0_ADDRESS_BASE 0x40000000
@@ -66,6 +70,7 @@
 #define FCLK_3_DEFAULT_FREQ 40000000
 
 /* Prototypes for device functions */
+static int ucube_program_fpga(void);
 static int ucube_lkm_open(struct inode *, struct file *);
 static int ucube_lkm_release(struct inode *, struct file *);
 static ssize_t ucube_lkm_read(struct file *, char *, size_t, loff_t *);
@@ -85,18 +90,54 @@ static int irq_line;
 
 /* STRUCTURE FOR THE DEVICE SPECIFIC DATA*/
 struct scope_device_data {
+    struct device_node *fpga_node;
     struct device devs[N_MINOR_NUMBERS];
     struct cdev cdevs[N_MINOR_NUMBERS];
     u32 *read_data_buffer_32;
     u64 *read_data_buffer_64;
     u32 *dma_buffer_32;
     u64 *dma_buffer_64;
+    u8 *bitstream_buffer;
+    size_t bitstream_len; 
     dma_addr_t physaddr;
     int new_data_available;
     struct clk *fclk[4];
     bool is_zynqmp;
     u32 dma_buf_size;
 };
+
+
+int ucube_program_fpga(void){
+    int ret;
+    struct fpga_image_info *info;
+    struct fpga_region *region;
+
+
+    pr_info("%s: Start FPGA programming", __func__);
+
+    
+    region = fpga_region_class_find(NULL, dev_data->fpga_node, device_match_of_node);
+    if (!region) return -ENODEV;
+
+
+    info = fpga_image_info_alloc(&dev_data->devs[3]);
+    if (!info) return -ENOMEM;
+    
+    info->buf = dev_data->bitstream_buffer;
+    info->count = dev_data->bitstream_len;
+    region->info = info;
+    ret = fpga_region_program_fpga(region);
+
+    pr_info("%s: Programming successfull", __func__);
+
+    region->info = NULL;
+    fpga_image_info_free(info);
+
+    put_device(&region->dev);
+
+    return ret;
+}
+
 
 
 static ssize_t fclk_0_show(struct device *dev, struct device_attribute *mattr, char *data) {
@@ -382,6 +423,18 @@ static long ucube_lkm_ioctl(struct file *filp, unsigned int cmd, unsigned long a
             break;
         }
         return 0;
+    }else if(minor == 3){
+        pr_info("%s: In ioctl\n CMD: %u\n ARG: %lu\n", __func__, cmd, arg);
+        switch (cmd){
+        case IOCTL_PROGRAM_FPGA:
+            pr_info("%s: FPGA BITSTREAM LENGTH: %lu\n", __func__, dev_data->bitstream_len);
+            ucube_program_fpga();
+            break;
+        default:
+            return -EINVAL;
+            break;
+        }
+        return 0;
     } else{
         return 0;
     }
@@ -424,15 +477,47 @@ static ssize_t ucube_lkm_read(struct file *flip, char *buffer, size_t count, lof
         }
         dev_data->new_data_available = 0;
         return count;    
+    } else if(minor == 3){
+        size_t datalen = BITSTREAM_BUFFER_SIZE;
+
+        if (*offset >= datalen)
+            return 0; // EOF
+
+        if (*offset + count > datalen)
+            count = datalen - *offset;
+
+        if (copy_to_user(buffer,
+                        dev_data->bitstream_buffer + *offset,
+                        count))
+            return -EFAULT;
+
+        *offset += count;
+        return count;
     }
+
     return 0;
 }
 
 
 static ssize_t ucube_lkm_write(struct file *flip, const char *buffer, size_t len, loff_t *offset) {
+    size_t needed;
     int minor = MINOR(flip->f_inode->i_rdev);
-    pr_info("%s: In write with minor number %d\n", __func__, minor);
+    if(minor == 3){
+        needed = *offset + len;
+
+        if (needed > BITSTREAM_BUFFER_SIZE)
+            return -EINVAL;
+
+        if (copy_from_user(dev_data->bitstream_buffer + *offset, buffer, len))
+            return -EFAULT;
+
+        *offset += len;
+        if (dev_data->bitstream_len < *offset)
+            dev_data->bitstream_len = *offset;
+        return len;
+    }
     
+    pr_info("%s: In write with minor number %d\n", __func__, minor);
     return len;
 }
 
@@ -554,6 +639,9 @@ static int __init ucube_lkm_init(void) {
     irq_rc = request_irq(irq_line, ucube_lkm_irq, 0, "ucube_lkm", NULL);
     //pr_warn("%s: unassigned irqs: %lu\n", __func__, probe_irq_on());
 
+    // Allocate bistream buffer
+    dev_data->bitstream_buffer = vmalloc(BITSTREAM_BUFFER_SIZE);
+    
     return irq_rc;
 }
 
@@ -582,6 +670,7 @@ static void __exit ucube_lkm_exit(void) {
         vfree(dev_data->read_data_buffer_64);
     }
 
+    vfree(dev_data->bitstream_buffer);
     
     
     platform_driver_unregister(&ucube_lkm_platform_driver);	
@@ -633,12 +722,21 @@ int ucube_lkm_probe(struct platform_device *pdev){
         clk_set_rate(dev_data->fclk[3], FCLK_3_DEFAULT_FREQ);
     }
 
+    dev_data->fpga_node = of_find_compatible_node(NULL, NULL, "fpga-region");
+    if (!dev_data->fpga_node){
+        pr_warn("%s: Unable to get FPGA device node", __func__);
+        return -ENODEV;
+    } else {
+        pr_info("Matched fpga-region: %pOF\n", dev_data->fpga_node);
+    }
+
     return 0;
 }
 
 int ucube_lkm_remove(struct platform_device *pdev){
     pr_info("%s: In platform remove\n", __func__);
     sysfs_remove_group(&pdev->dev.kobj, &uscope_lkm_attr_group);
+    of_node_put(dev_data->fpga_node);
     return 0;
 }
 
