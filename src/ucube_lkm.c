@@ -71,6 +71,8 @@
 
 /* Prototypes for device functions */
 static int ucube_program_fpga(void);
+
+bool ucube_fpga_loaded(void);
 static int ucube_lkm_open(struct inode *, struct file *);
 static int ucube_lkm_release(struct inode *, struct file *);
 static ssize_t ucube_lkm_read(struct file *, char *, size_t, loff_t *);
@@ -139,6 +141,28 @@ int ucube_program_fpga(void){
 }
 
 
+bool ucube_fpga_loaded(void){
+    
+    struct fpga_region *region;
+    struct fpga_manager *mgr;
+    region = fpga_region_class_find(NULL, dev_data->fpga_node, device_match_of_node);
+    if (!region) {
+        pr_err("%s: FPGA region not found\n", __func__);
+        return -ENODEV;
+    }
+    
+    // Get the FPGA manager from the region
+    mgr = region->mgr;
+    if (!mgr) {
+        put_device(&region->dev);
+        pr_err("%s: FPGA manager not found\n", __func__);
+        return -ENODEV;
+    }
+
+    put_device(&region->dev);
+
+    return mgr->state == FPGA_MGR_STATE_OPERATING;
+}
 
 static ssize_t fclk_0_show(struct device *dev, struct device_attribute *mattr, char *data) {
     if(!dev_data->is_zynqmp){
@@ -457,6 +481,7 @@ static int ucube_lkm_release(struct inode *inode, struct file *file) {
 static ssize_t ucube_lkm_read(struct file *flip, char *buffer, size_t count, loff_t *offset) {
     size_t datalen;
     unsigned long ret;
+    char result;
     int minor = MINOR(flip->f_inode->i_rdev);
     if(minor == 0){
         datalen = dev_data->dma_buf_size;
@@ -478,21 +503,9 @@ static ssize_t ucube_lkm_read(struct file *flip, char *buffer, size_t count, lof
         dev_data->new_data_available = 0;
         return count;    
     } else if(minor == 3){
-        size_t datalen = BITSTREAM_BUFFER_SIZE;
-
-        if (*offset >= datalen)
-            return 0; // EOF
-
-        if (*offset + count > datalen)
-            count = datalen - *offset;
-
-        if (copy_to_user(buffer,
-                        dev_data->bitstream_buffer + *offset,
-                        count))
-            return -EFAULT;
-
-        *offset += count;
-        return count;
+        result = ucube_fpga_loaded() ?'1' : '0';
+        if (copy_to_user(buffer, &result, 1)) return -EFAULT;
+        return 1;
     }
 
     return 0;
