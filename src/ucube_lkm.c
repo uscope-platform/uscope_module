@@ -700,14 +700,15 @@ int ucube_lkm_probe(struct platform_device *pdev){
     int i;
     char const * driver_mode;
     int device_type = 0;
-
+    u32 enable_clk;
+    
     pr_info("%s: In platform probe\n", __func__);
 
     irq_line = platform_get_irq(pdev, 0);
 
-    rc = of_property_read_string(pdev->dev.of_node, "ucubever", &driver_mode);
+    rc = of_property_read_string(pdev->dev.of_node, "ucube,arch", &driver_mode);
     if (rc) {
-        pr_err("%s: missing ucubever property\n", __func__);
+        pr_err("%s: missing ucube,arch property in device-tree\n", __func__);
         return rc;
     }
 
@@ -718,7 +719,12 @@ int ucube_lkm_probe(struct platform_device *pdev){
 
     /* GET HANDLES TO THE PL CLOCKS AND ENABLE THEM (Zynq-7000 and ZynqMP) */
     for (i = 0; i < 4; i++) {
-        
+        rc  = of_property_read_u32_index(pdev->dev.of_node, "ucube,fclk-enable", i, &enable_clk);
+        if (rc) {
+            pr_err("%s: missing ucube,fclk-enable property in device-tree\n", __func__);
+            return rc;
+        }
+
         dev_data->fclk[i] = devm_clk_get(&pdev->dev, fclk_names[device_type][i]);
         if (IS_ERR(dev_data->fclk[i])) {
             dev_err(&pdev->dev, "%s lookup failed: %ld\n",
@@ -726,13 +732,14 @@ int ucube_lkm_probe(struct platform_device *pdev){
             dev_data->fclk[i] = NULL;
             continue;
         }
-
-        rc = clk_prepare_enable(dev_data->fclk[i]);
-        if (rc)
-            dev_err(&pdev->dev, "%s enable failed: %d\n", fclk_names[device_type][i], rc);
-        else
-            dev_info(&pdev->dev, "%s enabled at %lu Hz\n",
-                     fclk_names[device_type][i], clk_get_rate(dev_data->fclk[i]));
+        if(enable_clk){
+            rc = clk_prepare_enable(dev_data->fclk[i]);
+            if (rc)
+                dev_err(&pdev->dev, "%s enable failed: %d\n", fclk_names[device_type][i], rc);
+            else
+                dev_info(&pdev->dev, "%s enabled at %lu Hz\n",
+                        fclk_names[device_type][i], clk_get_rate(dev_data->fclk[i]));
+        }
     }
 
     /* Only touch the rates on Zynq-7000; on ZynqMP the PMU firmware owns them */
@@ -769,7 +776,7 @@ MODULE_DEVICE_TABLE(of, ucube_lkm_match_table);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Filippo Savi");
 MODULE_DESCRIPTION("uScope dma handler");
-MODULE_VERSION("1.07");
+MODULE_VERSION("1.08");
 
 module_init(ucube_lkm_init);
 module_exit(ucube_lkm_exit);
