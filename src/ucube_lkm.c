@@ -32,6 +32,7 @@
 #include <linux/poll.h>
 #include <asm/pgtable.h>
 #include <linux/clk.h>
+#include <linux/mutex.h>
 #include <linux/device.h>
 #include <linux/fpga/fpga-mgr.h>
 #include <linux/fpga/fpga-region.h>
@@ -90,6 +91,14 @@ static struct scope_device_data *dev_data;
 
 static int irq_line;
 
+/* One PL reference clock plus its sysfs controls */
+struct ucube_fclk {
+    struct clk *clk;
+    bool on;
+    struct device_attribute rate_attr;
+    struct device_attribute en_attr;
+};
+
 /* STRUCTURE FOR THE DEVICE SPECIFIC DATA*/
 struct scope_device_data {
     struct device_node *fpga_node;
@@ -103,7 +112,8 @@ struct scope_device_data {
     size_t bitstream_len; 
     dma_addr_t physaddr;
     int new_data_available;
-    struct clk *fclk[4];
+    struct ucube_fclk fclk[4];
+    struct mutex fclk_lock;
     bool is_zynqmp;
     u32 dma_buf_size;
 };
@@ -164,77 +174,86 @@ bool ucube_fpga_loaded(void){
     return mgr->state == FPGA_MGR_STATE_OPERATING;
 }
 
-static ssize_t fclk_0_show(struct device *dev, struct device_attribute *mattr, char *data) {
-    if(!dev_data->is_zynqmp){
-        unsigned long freq = clk_get_rate(dev_data->fclk[0]);
-        return sprintf(data, "%lu\n", freq);
-    } else {
-        return 0;
+static int ucube_fclk_set_enabled(struct ucube_fclk *f, bool on)
+{
+    int rc = 0;
+
+    if (!f->clk)
+        return -ENODEV;
+
+    mutex_lock(&dev_data->fclk_lock);
+    if (on != f->on) {
+        if (on)
+            rc = clk_prepare_enable(f->clk);
+        else
+            clk_disable_unprepare(f->clk);
+        if (!rc)
+            f->on = on;
     }
-}
-static ssize_t fclk_1_show(struct device *dev, struct device_attribute *mattr, char *data) {
-    if(!dev_data->is_zynqmp){
-        unsigned long freq = clk_get_rate(dev_data->fclk[1]);
-        return sprintf(data, "%lu\n", freq);
-    } else {
-        return 0;
-    }
-}
-static ssize_t fclk_2_show(struct device *dev, struct device_attribute *mattr, char *data) {
-    if(!dev_data->is_zynqmp){
-        unsigned long freq = clk_get_rate(dev_data->fclk[2]);
-        return sprintf(data, "%lu\n", freq);
-    } else {
-        return 0;
-    }
-}
-static ssize_t fclk_3_show(struct device *dev, struct device_attribute *mattr, char *data) {
-    if(!dev_data->is_zynqmp){
-        unsigned long freq = clk_get_rate(dev_data->fclk[3]);
-        return sprintf(data, "%lu\n", freq);
-    } else {
-        return 0;
-    }
+    mutex_unlock(&dev_data->fclk_lock);
+    return rc;
 }
 
-static ssize_t fclk_0_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t len) {
+static inline struct ucube_fclk *rate_to_fclk(struct device_attribute *a)
+{
+    return container_of(a, struct ucube_fclk, rate_attr);
+}
+
+static inline struct ucube_fclk *en_to_fclk(struct device_attribute *a)
+{
+    return container_of(a, struct ucube_fclk, en_attr);
+}
+
+static ssize_t fclk_show(struct device *dev, struct device_attribute *a, char *buf)
+{
+    if (dev_data->is_zynqmp)
+        return 0;
+    return sysfs_emit(buf, "%lu\n", clk_get_rate(rate_to_fclk(a)->clk));
+}
+
+static ssize_t fclk_store(struct device *dev, struct device_attribute *a,
+                          const char *buf, size_t len)
+{
     unsigned long freq;
-    if(kstrtoul(buf, 0, &freq))
+
+    if (kstrtoul(buf, 0, &freq))
         return -EINVAL;
-    if(!dev_data->is_zynqmp){
-        clk_set_rate(dev_data->fclk[0], freq);
-    } 
+    if (!dev_data->is_zynqmp)
+        clk_set_rate(rate_to_fclk(a)->clk, freq);
     return len;
 }
 
-static ssize_t fclk_1_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t len) {
-    unsigned long freq;
-        if(kstrtoul(buf, 0, &freq))
-            return -EINVAL;
-    if(!dev_data->is_zynqmp){
-        clk_set_rate(dev_data->fclk[1], freq);
-    } 
-    return len;
+static ssize_t fclk_en_show(struct device *dev, struct device_attribute *a, char *buf)
+{
+    return sysfs_emit(buf, "%d\n", en_to_fclk(a)->on);
 }
 
-static ssize_t fclk_2_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t len) {
-    unsigned long freq;
-    if(kstrtoul(buf, 0, &freq))
-        return -EINVAL;
-    if(!dev_data->is_zynqmp){
-        clk_set_rate(dev_data->fclk[2], freq);
-    } 
-    return len;
+static ssize_t fclk_en_store(struct device *dev, struct device_attribute *a,
+                             const char *buf, size_t len)
+{
+    bool on;
+    int rc = kstrtobool(buf, &on);
+
+    if (rc)
+        return rc;
+    rc = ucube_fclk_set_enabled(en_to_fclk(a), on);
+    return rc ? rc : len;
 }
 
-static ssize_t fclk_3_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t len) {
-    unsigned long freq;
-    if(kstrtoul(buf, 0, &freq))
-        return -EINVAL;
-    if(!dev_data->is_zynqmp){
-        clk_set_rate(dev_data->fclk[3], freq);
-    } 
-    return len;
+static int fclk_add_file(struct device *dev, struct device_attribute *a, int i,
+                         const char *suffix,
+                         ssize_t (*show)(struct device *, struct device_attribute *, char *),
+                         ssize_t (*store)(struct device *, struct device_attribute *,
+                                          const char *, size_t))
+{
+    sysfs_attr_init(&a->attr);      /* needed for dynamically allocated attrs (lockdep) */
+    a->attr.name = devm_kasprintf(dev, GFP_KERNEL, "fclk_%d%s", i, suffix);
+    if (!a->attr.name)
+        return -ENOMEM;
+    a->attr.mode = 0644;
+    a->show = show;
+    a->store = store;
+    return device_create_file(dev, a);
 }
 
 static ssize_t dma_addr_show(struct device *dev, struct device_attribute *mattr, char *data) {
@@ -310,18 +329,10 @@ static ssize_t dma_buf_size_store(struct device *dev, struct device_attribute *a
     return len;
 }
 
-static DEVICE_ATTR(fclk_0, 0644, fclk_0_show, fclk_0_store);
-static DEVICE_ATTR(fclk_1, 0644, fclk_1_show, fclk_1_store);
-static DEVICE_ATTR(fclk_2, 0644, fclk_2_show, fclk_2_store);
-static DEVICE_ATTR(fclk_3, 0644, fclk_3_show, fclk_3_store);
 static DEVICE_ATTR(dma_addr, 0444, dma_addr_show, dma_addr_store);
 static DEVICE_ATTR(dma_buf_size, 0644, dma_buf_size_show, dma_buf_size_store);
 
 static struct attribute *uscope_lkm_attrs[] = {
-	&dev_attr_fclk_0.attr,
-	&dev_attr_fclk_1.attr,
-	&dev_attr_fclk_2.attr,
-	&dev_attr_fclk_3.attr,
 	&dev_attr_dma_addr.attr,
 	&dev_attr_dma_buf_size.attr,
 	NULL,
@@ -579,6 +590,7 @@ static int __init ucube_lkm_init(void) {
 
     dev_data = kzalloc(sizeof(*dev_data), GFP_KERNEL);
     dev_data->new_data_available = 0;
+    mutex_init(&dev_data->fclk_lock);
 
     for(int i = 0; i< N_MINOR_NUMBERS; i++){
         dev_data->devs[i].devt =  devices[i];
@@ -717,37 +729,43 @@ int ucube_lkm_probe(struct platform_device *pdev){
     device_type = dev_data->is_zynqmp ? 1: 0;
     rc = sysfs_create_group(&pdev->dev.kobj, &uscope_lkm_attr_group);
 
-    /* GET HANDLES TO THE PL CLOCKS AND ENABLE THEM (Zynq-7000 and ZynqMP) */
+    /* GET HANDLES TO THE PL CLOCKS AND ENABLE THOSE THE DT ASKS FOR (Zynq-7000 and ZynqMP) */
     for (i = 0; i < 4; i++) {
-        rc  = of_property_read_u32_index(pdev->dev.of_node, "ucube,fclk-enable", i, &enable_clk);
+        struct ucube_fclk *f = &dev_data->fclk[i];
+
+        rc = of_property_read_u32_index(pdev->dev.of_node, "ucube,fclk-enable", i, &enable_clk);
         if (rc) {
             pr_err("%s: missing ucube,fclk-enable property in device-tree\n", __func__);
             return rc;
         }
 
-        dev_data->fclk[i] = devm_clk_get(&pdev->dev, fclk_names[device_type][i]);
-        if (IS_ERR(dev_data->fclk[i])) {
+        f->clk = devm_clk_get(&pdev->dev, fclk_names[device_type][i]);
+        if (IS_ERR(f->clk)) {
             dev_err(&pdev->dev, "%s lookup failed: %ld\n",
-                    fclk_names[device_type][i], PTR_ERR(dev_data->fclk[i]));
-            dev_data->fclk[i] = NULL;
+                    fclk_names[device_type][i], PTR_ERR(f->clk));
+            f->clk = NULL;
             continue;
         }
-        if(enable_clk){
-            rc = clk_prepare_enable(dev_data->fclk[i]);
+
+        fclk_add_file(&pdev->dev, &f->rate_attr, i, "",    fclk_show,    fclk_store);
+        fclk_add_file(&pdev->dev, &f->en_attr,   i, "_en", fclk_en_show, fclk_en_store);
+
+        if (enable_clk) {
+            rc = ucube_fclk_set_enabled(f, true);
             if (rc)
                 dev_err(&pdev->dev, "%s enable failed: %d\n", fclk_names[device_type][i], rc);
             else
                 dev_info(&pdev->dev, "%s enabled at %lu Hz\n",
-                        fclk_names[device_type][i], clk_get_rate(dev_data->fclk[i]));
+                         fclk_names[device_type][i], clk_get_rate(f->clk));
         }
     }
 
     /* Only touch the rates on Zynq-7000; on ZynqMP the PMU firmware owns them */
     if (!dev_data->is_zynqmp) {
-        clk_set_rate(dev_data->fclk[0], FCLK_0_DEFAULT_FREQ);
-        clk_set_rate(dev_data->fclk[1], FCLK_1_DEFAULT_FREQ);
-        clk_set_rate(dev_data->fclk[2], FCLK_2_DEFAULT_FREQ);
-        clk_set_rate(dev_data->fclk[3], FCLK_3_DEFAULT_FREQ);
+        clk_set_rate(dev_data->fclk[0].clk, FCLK_0_DEFAULT_FREQ);
+        clk_set_rate(dev_data->fclk[1].clk, FCLK_1_DEFAULT_FREQ);
+        clk_set_rate(dev_data->fclk[2].clk, FCLK_2_DEFAULT_FREQ);
+        clk_set_rate(dev_data->fclk[3].clk, FCLK_3_DEFAULT_FREQ);
     }
 
     dev_data->fpga_node = of_find_compatible_node(NULL, NULL, "fpga-region");
@@ -765,8 +783,15 @@ void ucube_lkm_remove(struct platform_device *pdev){
     int i;
     pr_info("%s: In platform remove\n", __func__);
     sysfs_remove_group(&pdev->dev.kobj, &uscope_lkm_attr_group);
-    for (i = 0; i < 4; i++)
-        clk_disable_unprepare(dev_data->fclk[i]);   /* NULL-safe */
+    for (i = 0; i < 4; i++) {
+        struct ucube_fclk *f = &dev_data->fclk[i];
+
+        if (!f->clk)
+            continue;
+        device_remove_file(&pdev->dev, &f->rate_attr);
+        device_remove_file(&pdev->dev, &f->en_attr);
+        ucube_fclk_set_enabled(f, false);   /* no-op if already off */
+    }
 
     of_node_put(dev_data->fpga_node);
 }
@@ -776,7 +801,7 @@ MODULE_DEVICE_TABLE(of, ucube_lkm_match_table);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Filippo Savi");
 MODULE_DESCRIPTION("uScope dma handler");
-MODULE_VERSION("1.08");
+MODULE_VERSION("1.09");
 
 module_init(ucube_lkm_init);
 module_exit(ucube_lkm_exit);
