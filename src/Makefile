@@ -1,12 +1,17 @@
+KDIR  := /software/kernel_dev/linux-xlnx
 PWD := $(shell pwd)
+BUILD := $(CURDIR)/build
 obj-m += ucube_lkm.o
 ccflags-y := -std=gnu99
 
+
 all:
-	make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -C /home/fils/git/uscope_module/linux-xlnx/ M=$(PWD) modules
- 
+	mkdir -p $(BUILD)
+	$(MAKE)  ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -C $(KDIR)  M=$(CURDIR) MO=$(BUILD) modules
+	cp $(BUILD)/ucube_lkm.ko $(CURDIR)/
+
 modules_install:
-	$(MAKE) -C $(KERNEL_SRC) M=$(SRC) modules_install
+	$(MAKE) -C $(KERNEL_SRC) M=$(CURDIR) MO=$(BUILD) modules_install
 
 clean:
-	rm -rf *.o *.ko *.mod.* *.symvers *.order .*.cmd *.mod
+	rm -rf $(BUILD) ucube_lkm.ko
