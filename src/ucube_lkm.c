@@ -206,8 +206,6 @@ static inline struct ucube_fclk *en_to_fclk(struct device_attribute *a)
 
 static ssize_t fclk_show(struct device *dev, struct device_attribute *a, char *buf)
 {
-    if (dev_data->is_zynqmp)
-        return 0;
     return sysfs_emit(buf, "%lu\n", clk_get_rate(rate_to_fclk(a)->clk));
 }
 
@@ -218,8 +216,7 @@ static ssize_t fclk_store(struct device *dev, struct device_attribute *a,
 
     if (kstrtoul(buf, 0, &freq))
         return -EINVAL;
-    if (!dev_data->is_zynqmp)
-        clk_set_rate(rate_to_fclk(a)->clk, freq);
+    clk_set_rate(rate_to_fclk(a)->clk, freq);
     return len;
 }
 
@@ -801,7 +798,7 @@ MODULE_DEVICE_TABLE(of, ucube_lkm_match_table);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Filippo Savi");
 MODULE_DESCRIPTION("uScope dma handler");
-MODULE_VERSION("1.09");
+MODULE_VERSION("1.11");
 
 module_init(ucube_lkm_init);
 module_exit(ucube_lkm_exit);
