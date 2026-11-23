@@ -7,3 +7,5 @@ linux-xlnx
 **/*.mod.c
 **/*.symvers
 .vscode-ctags
+local.mk
+build/
