@@ -95,7 +95,7 @@ static long ucube_lkm_ioctl(struct file *filp, unsigned int cmd, unsigned long a
             break;
         }
         return 0;
-    }else if(minor == 3){
+    } else if(minor == 3){
         switch (cmd){
         case IOCTL_PROGRAM_FPGA:
             pr_info("%s: FPGA BITSTREAM LENGTH: %lu\n", __func__, dev_data->bitstream_len);
@@ -125,14 +125,15 @@ static int ucube_lkm_release(struct inode *inode, struct file *file) {
     return 0;
 }
 
-static ssize_t ucube_lkm_read(struct file *flip, char *buffer, size_t count, loff_t *offset) {
+static ssize_t ucube_lkm_read(
+    struct file *flip, char __user *buffer, size_t count, loff_t *offset
+) {
     size_t datalen;
     unsigned long ret;
     char result;
     int minor = MINOR(flip->f_inode->i_rdev);
     if(minor == 0){
         datalen = dev_data->dma_buf_size;
-
 
         if (count > datalen) {
             count = datalen;
@@ -159,7 +160,9 @@ static ssize_t ucube_lkm_read(struct file *flip, char *buffer, size_t count, lof
 }
 
 
-static ssize_t ucube_lkm_write(struct file *flip, const char *buffer, size_t len, loff_t *offset) {
+static ssize_t ucube_lkm_write(
+    struct file *flip, const char __user *buffer, size_t len, loff_t *offset
+) {
     size_t needed;
     int minor = MINOR(flip->f_inode->i_rdev);
     if(minor == 3){

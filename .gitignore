@@ -9,3 +9,4 @@ linux-xlnx
 .vscode-ctags
 local.mk
 build/
+compile_commands.json

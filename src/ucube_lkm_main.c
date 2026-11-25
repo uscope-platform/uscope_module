@@ -158,6 +158,22 @@ static int __init ucube_lkm_init(void) {
     dev_t devices[N_MINOR_NUMBERS];
     const char* const device_names[] = { "uscope_data", "uscope_BUS_0", "uscope_BUS_1", "uscope_bitstream"}; 
     
+    // ALLOCTE THE MAIN DRIVER DATA STRUCTURE
+    dev_data = kzalloc(sizeof(*dev_data), GFP_KERNEL);
+    if(!dev_data){
+        pr_err("%s: Failed to allocate driver data\n", __func__);
+        return -ENOMEM;
+    }
+
+    // ANY LARGE BUFFER SHOULD BE ALLOCATED HERE TO AVOID FAILING MID LOAD
+    dev_data->bitstream_buffer = vmalloc(BITSTREAM_BUFFER_SIZE);
+    if(!dev_data->bitstream_buffer){
+        pr_err("%s: Failed to allocate memory for the bitstream buffer\n", __func__);
+        kfree(dev_data);
+        dev_data = NULL;
+        return -ENOMEM;
+    }
+
     /* DYNAMICALLY ALLOCATE DEVICE NUMBERS, CLASSES, ETC.*/
     pr_info("%s: In init\n", __func__);
 
@@ -176,7 +192,7 @@ static int __init ucube_lkm_init(void) {
         devices[i] = MKDEV(major, i);
     }
 
-    dev_data = kzalloc(sizeof(*dev_data), GFP_KERNEL);
+
     dev_data->new_data_available = 0;
     mutex_init(&dev_data->fclk_lock);
 
@@ -241,9 +257,6 @@ static int __init ucube_lkm_init(void) {
     irq_rc = request_irq(irq_line, ucube_lkm_irq, 0, "ucube_lkm", NULL);
     //pr_warn("%s: unassigned irqs: %lu\n", __func__, probe_irq_on());
 
-    // Allocate bistream buffer
-    dev_data->bitstream_buffer = vmalloc(BITSTREAM_BUFFER_SIZE);
-    
     return irq_rc;
 }
 
