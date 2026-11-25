@@ -68,6 +68,11 @@
 
 
 
+/* R5 clock = RPLL / RPU_CLK_DIV; rpu_clk accepts RPU_CLK_MIN..RPU_CLK_MAX */
+#define RPU_CLK_DIV 2
+#define RPU_CLK_MIN 375000000U
+#define RPU_CLK_MAX 500000000U
+
 #define FCLK_0_DEFAULT_FREQ 100000000
 #define FCLK_1_DEFAULT_FREQ 40000000
 #define FCLK_2_DEFAULT_FREQ 40000000
@@ -95,6 +100,7 @@ struct scope_device_data {
     dma_addr_t physaddr;
     int new_data_available;
     struct ucube_fclk fclk[4];
+    struct ucube_fclk rpu_pll;      /* ZynqMP RPLL, normally the R5 clock source */
     struct mutex fclk_lock;
     bool is_zynqmp;
     u32 dma_buf_size;
@@ -122,6 +128,9 @@ bool ucube_fpga_loaded(void);
 /* PL reference clock control */
 int ucube_fclk_set_enabled(struct ucube_fclk *f, bool on);
 void ucube_fclk_add_files(struct device *dev, struct ucube_fclk *f, int i);
+void ucube_clk_add_files(struct device *dev, struct ucube_fclk *f, const char *name);
+void ucube_rpu_clk_add_files(struct device *dev, struct ucube_fclk *f);
+
 
 /* Shared memory window */
 int ucube_shm_alloc(struct device *dev);

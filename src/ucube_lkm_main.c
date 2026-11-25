@@ -122,6 +122,35 @@ int ucube_lkm_probe(struct platform_device *pdev){
         clk_set_rate(dev_data->fclk[3].clk, FCLK_3_DEFAULT_FREQ);
     }
 
+    /*
+     * RPU CLOCK (ZynqMP): RPLL normally feeds the R5. Linux does not see the R5
+     * clock, so unless something claims RPLL it is switched off at the end of
+     * boot and the R5 drops to 16.67 MHz. Same handling as the PL clocks:
+     * "rpll" in clock-names, enabled when ucube,rpu-clk-enable = <1>.
+     */
+    if (dev_data->is_zynqmp) {
+        struct ucube_fclk *f = &dev_data->rpu_pll;
+
+        f->clk = devm_clk_get_optional(&pdev->dev, "rpll");
+        if (IS_ERR(f->clk)) {
+            dev_err(&pdev->dev, "rpll lookup failed: %ld\n", PTR_ERR(f->clk));
+            f->clk = NULL;
+        } else if (f->clk) {
+            ucube_rpu_clk_add_files(&pdev->dev, f);
+
+            if (of_property_read_u32(pdev->dev.of_node, "ucube,rpu-clk-enable", &enable_clk))
+                enable_clk = 0;
+            if (enable_clk) {
+                rc = ucube_fclk_set_enabled(f, true);
+                if (rc)
+                    dev_err(&pdev->dev, "rpll enable failed: %d\n", rc);
+                else
+                    dev_info(&pdev->dev, "rpll enabled, R5 clock %lu Hz\n",
+                             clk_get_rate(f->clk) / RPU_CLK_DIV);
+            }
+        }
+    }
+
     dev_data->fpga_node = of_find_compatible_node(NULL, NULL, "fpga-region");
     if (!dev_data->fpga_node){
         pr_warn("%s: Unable to get FPGA device node", __func__);
@@ -156,6 +185,11 @@ void ucube_lkm_remove(struct platform_device *pdev){
         device_remove_file(&pdev->dev, &f->rate_attr);
         device_remove_file(&pdev->dev, &f->en_attr);
         ucube_fclk_set_enabled(f, false);   /* no-op if already off */
+    }
+    if (dev_data->rpu_pll.clk) {
+        device_remove_file(&pdev->dev, &dev_data->rpu_pll.rate_attr);
+        device_remove_file(&pdev->dev, &dev_data->rpu_pll.en_attr);
+        ucube_fclk_set_enabled(&dev_data->rpu_pll, false);
     }
 
     of_node_put(dev_data->fpga_node);
@@ -319,7 +353,7 @@ static void __exit ucube_lkm_exit(void) {
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Filippo Savi");
 MODULE_DESCRIPTION("uScope dma handler");
-MODULE_VERSION("1.12");
+MODULE_VERSION("1.14");
 
 module_init(ucube_lkm_init);
 module_exit(ucube_lkm_exit);
