@@ -130,12 +130,23 @@ int ucube_lkm_probe(struct platform_device *pdev){
         pr_info("Matched fpga-region: %pOF\n", dev_data->fpga_node);
     }
 
+    /*
+     * Allocated last: remove() is not called when probe fails, so nothing
+     * after this point may fail. It is freed in ucube_lkm_remove().
+     */
+    rc = ucube_shm_alloc(&pdev->dev);
+    if (rc) {
+        of_node_put(dev_data->fpga_node);
+        return rc;
+    }
+
     return 0;
 }
 
 void ucube_lkm_remove(struct platform_device *pdev){
     int i;
     pr_info("%s: In platform remove\n", __func__);
+    ucube_shm_free(&pdev->dev);
     sysfs_remove_group(&pdev->dev.kobj, &uscope_lkm_attr_group);
     for (i = 0; i < 4; i++) {
         struct ucube_fclk *f = &dev_data->fclk[i];
@@ -156,7 +167,7 @@ static int __init ucube_lkm_init(void) {
     int major;
     int cdev_rcs[N_MINOR_NUMBERS];
     dev_t devices[N_MINOR_NUMBERS];
-    const char* const device_names[] = { "uscope_data", "uscope_BUS_0", "uscope_BUS_1", "uscope_bitstream"}; 
+    const char* const device_names[] = { "uscope_data", "uscope_BUS_0", "uscope_BUS_1", "uscope_bitstream", "uscope_shm"}; 
     
     // ALLOCTE THE MAIN DRIVER DATA STRUCTURE
     dev_data = kzalloc(sizeof(*dev_data), GFP_KERNEL);
@@ -308,7 +319,7 @@ static void __exit ucube_lkm_exit(void) {
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Filippo Savi");
 MODULE_DESCRIPTION("uScope dma handler");
-MODULE_VERSION("1.11");
+MODULE_VERSION("1.12");
 
 module_init(ucube_lkm_init);
 module_exit(ucube_lkm_exit);

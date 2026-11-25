@@ -3,7 +3,8 @@ ucube_lkm-y := ucube_lkm_main.o \
                ucube_lkm_chrdev.o \
                ucube_lkm_fpga.o \
                ucube_lkm_fclk.o \
-               ucube_lkm_dma.o
+               ucube_lkm_dma.o \
+               ucube_lkm_shm.o
 
 # Local development settings (kernel path, toolchain, out-of-tree build dir).
 # This file is git-ignored, so it never affects a Yocto build.

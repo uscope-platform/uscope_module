@@ -36,6 +36,10 @@ static int ucube_lkm_mmap(struct file *filp, struct vm_area_struct *vma){
     uint64_t mapping_limit_base_0, mapping_limit_top_0;
     uint64_t mapping_limit_base_1, mapping_limit_top_1;
 
+    /* The shared memory window has its own mapping rules */
+    if(minor == 4)
+        return ucube_shm_mmap(vma);
+
     if(dev_data->is_zynqmp){
         mapping_limit_base_0 = ZYNQMP_BUS_0_ADDRESS_BASE;
         mapping_limit_top_0 = ZYNQMP_BUS_0_ADDRESS_TOP;

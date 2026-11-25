@@ -40,7 +40,7 @@
 #include <linux/fpga/fpga-mgr.h>
 #include <linux/fpga/fpga-region.h>
 
-#define N_MINOR_NUMBERS	4
+#define N_MINOR_NUMBERS	5
 
 #define N_SCOPE_CHANNELS 6
 #define KERNEL_BUFFER_LENGTH N_SCOPE_CHANNELS*1024*sizeof(u64)
@@ -98,6 +98,11 @@ struct scope_device_data {
     struct mutex fclk_lock;
     bool is_zynqmp;
     u32 dma_buf_size;
+    /* Shared memory window (see ucube_lkm_shm.c) */
+    struct device *shm_dev;
+    void *shm_va;
+    dma_addr_t shm_phys;
+    size_t shm_size;
 };
 
 /* Shared module state */
@@ -117,5 +122,10 @@ bool ucube_fpga_loaded(void);
 /* PL reference clock control */
 int ucube_fclk_set_enabled(struct ucube_fclk *f, bool on);
 void ucube_fclk_add_files(struct device *dev, struct ucube_fclk *f, int i);
+
+/* Shared memory window */
+int ucube_shm_alloc(struct device *dev);
+void ucube_shm_free(struct device *dev);
+int ucube_shm_mmap(struct vm_area_struct *vma);
 
 #endif /* UCUBE_LKM_H */
