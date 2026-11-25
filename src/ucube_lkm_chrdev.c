@@ -23,6 +23,12 @@ static __poll_t ucube_lkm_poll(struct file *flip , struct poll_table_struct * po
         mask |= POLLIN | POLLRDNORM;
         return mask;
     }
+    if(minor == 4){
+        /* Readable once the R5 has rung since this file's last read() */
+        poll_wait(flip, &dev_data->ipi_wq, poll_struct);
+        if ((unsigned int)atomic_read(&dev_data->ipi_count) != (uintptr_t)flip->private_data)
+            return POLLIN | POLLRDNORM;
+    }
     return 0;
 }
 
@@ -110,6 +116,13 @@ static long ucube_lkm_ioctl(struct file *filp, unsigned int cmd, unsigned long a
             break;
         }
         return 0;
+    } else if(minor == 4){
+        switch (cmd){
+        case IOCTL_RING_RPU:
+            return ucube_ipi_ring();
+        default:
+            return -EINVAL;
+        }
     } else{
         return 0;
     }
@@ -120,6 +133,10 @@ static long ucube_lkm_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 static int ucube_lkm_open(struct inode *inode, struct file *file) {
 
     pr_info("%s: In open\n", __func__);
+
+    /* Shared memory: only doorbells arriving after open() count for this file */
+    if (MINOR(inode->i_rdev) == 4)
+        file->private_data = (void *)(uintptr_t)(unsigned int)atomic_read(&dev_data->ipi_count);
 
     return 0;
 }
@@ -158,6 +175,27 @@ static ssize_t ucube_lkm_read(
         result = ucube_fpga_loaded() ?'1' : '0';
         if (copy_to_user(buffer, &result, 1)) return -EFAULT;
         return 1;
+    } else if(minor == 4){
+        /* Wait for the R5 to ring; return how many doorbells arrived since the last read */
+        unsigned int seen = (uintptr_t)flip->private_data;
+        unsigned int now;
+        u32 n;
+
+        if (count < sizeof(n))
+            return -EINVAL;
+        if ((unsigned int)atomic_read(&dev_data->ipi_count) == seen) {
+            if (flip->f_flags & O_NONBLOCK)
+                return -EAGAIN;
+            if (wait_event_interruptible(dev_data->ipi_wq,
+                    (unsigned int)atomic_read(&dev_data->ipi_count) != seen))
+                return -ERESTARTSYS;
+        }
+        now = atomic_read(&dev_data->ipi_count);
+        n = now - seen;
+        flip->private_data = (void *)(uintptr_t)now;
+        if (copy_to_user(buffer, &n, sizeof(n)))
+            return -EFAULT;
+        return sizeof(n);
     }
 
     return 0;

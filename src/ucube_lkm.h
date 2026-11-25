@@ -39,6 +39,9 @@
 #include <linux/device.h>
 #include <linux/fpga/fpga-mgr.h>
 #include <linux/fpga/fpga-region.h>
+#include <linux/mailbox_client.h>
+#include <linux/wait.h>
+#include <linux/atomic.h>
 
 #define N_MINOR_NUMBERS	5
 
@@ -52,6 +55,7 @@
 #define IOCTL_NEW_DATA_AVAILABLE 1
 #define IOCTL_GET_BUFFER_ADDRESS 2
 #define IOCTL_PROGRAM_FPGA 3
+#define IOCTL_RING_RPU 4        /* on /dev/uscope_shm */
 
 
 #define ZYNQ_BUS_0_ADDRESS_BASE 0x40000000
@@ -109,6 +113,12 @@ struct scope_device_data {
     void *shm_va;
     dma_addr_t shm_phys;
     size_t shm_size;
+    /* IPI doorbell to/from the R5 (see ucube_lkm_ipi.c) */
+    struct mbox_client ipi_cl;
+    struct mbox_chan *ipi_tx;
+    struct mbox_chan *ipi_rx;
+    wait_queue_head_t ipi_wq;
+    atomic_t ipi_count;         /* doorbells received from the R5 */
 };
 
 /* Shared module state */
@@ -136,5 +146,10 @@ void ucube_rpu_clk_add_files(struct device *dev, struct ucube_fclk *f);
 int ucube_shm_alloc(struct device *dev);
 void ucube_shm_free(struct device *dev);
 int ucube_shm_mmap(struct vm_area_struct *vma);
+
+/* IPI doorbell */
+void ucube_ipi_init(struct device *dev);
+void ucube_ipi_free(void);
+int ucube_ipi_ring(void);
 
 #endif /* UCUBE_LKM_H */

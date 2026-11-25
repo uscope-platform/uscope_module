@@ -169,12 +169,16 @@ int ucube_lkm_probe(struct platform_device *pdev){
         return rc;
     }
 
+    /* Optional and never fails probe: without it /dev/uscope_shm has no doorbell */
+    ucube_ipi_init(&pdev->dev);
+
     return 0;
 }
 
 void ucube_lkm_remove(struct platform_device *pdev){
     int i;
     pr_info("%s: In platform remove\n", __func__);
+    ucube_ipi_free();
     ucube_shm_free(&pdev->dev);
     sysfs_remove_group(&pdev->dev.kobj, &uscope_lkm_attr_group);
     for (i = 0; i < 4; i++) {
@@ -240,6 +244,7 @@ static int __init ucube_lkm_init(void) {
 
     dev_data->new_data_available = 0;
     mutex_init(&dev_data->fclk_lock);
+    init_waitqueue_head(&dev_data->ipi_wq);
 
     for(int i = 0; i< N_MINOR_NUMBERS; i++){
         dev_data->devs[i].devt =  devices[i];
@@ -353,7 +358,7 @@ static void __exit ucube_lkm_exit(void) {
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Filippo Savi");
 MODULE_DESCRIPTION("uScope dma handler");
-MODULE_VERSION("1.14");
+MODULE_VERSION("1.15");
 
 module_init(ucube_lkm_init);
 module_exit(ucube_lkm_exit);
