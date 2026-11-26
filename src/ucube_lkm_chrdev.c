@@ -232,8 +232,13 @@ static ssize_t ucube_lkm_write(
 }
 
 
-/* This structure points to all of the device functions */
+/*
+ * This structure points to all of the device functions. The owner pins the module
+ * while any device file is open or mapped (cdev_init takes it from here): without
+ * it rmmod goes through under an open file and its next call runs freed code.
+ */
 struct file_operations ucube_lkm_file_ops = {
+    .owner = THIS_MODULE,
     .read = ucube_lkm_read,
     .write = ucube_lkm_write,
     .open = ucube_lkm_open,
