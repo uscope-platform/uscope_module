@@ -169,7 +169,7 @@ int ucube_lkm_probe(struct platform_device *pdev){
         return rc;
     }
 
-    /* Optional and never fails probe: without it /dev/uscope_shm has no doorbell */
+    /* Optional and never fails probe: a core without mailboxes has no doorbell */
     ucube_ipi_init(&pdev->dev);
 
     return 0;
@@ -205,7 +205,7 @@ static int __init ucube_lkm_init(void) {
     int major;
     int cdev_rcs[N_MINOR_NUMBERS];
     dev_t devices[N_MINOR_NUMBERS];
-    const char* const device_names[] = { "uscope_data", "uscope_BUS_0", "uscope_BUS_1", "uscope_bitstream", "uscope_shm"}; 
+    const char* const device_names[] = { "uscope_data", "uscope_BUS_0", "uscope_BUS_1", "uscope_bitstream", "uscope_shm_0", "uscope_shm_1"};
     
     // ALLOCTE THE MAIN DRIVER DATA STRUCTURE
     dev_data = kzalloc(sizeof(*dev_data), GFP_KERNEL);
@@ -244,7 +244,10 @@ static int __init ucube_lkm_init(void) {
 
     dev_data->new_data_available = 0;
     mutex_init(&dev_data->fclk_lock);
-    init_waitqueue_head(&dev_data->ipi_wq);
+    for(int i = 0; i < N_RPU_CORES; i++){
+        dev_data->rpu[i].core = i;
+        init_waitqueue_head(&dev_data->rpu[i].ipi_wq);
+    }
 
     for(int i = 0; i< N_MINOR_NUMBERS; i++){
         dev_data->devs[i].devt =  devices[i];

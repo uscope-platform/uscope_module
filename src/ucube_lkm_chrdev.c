@@ -23,10 +23,12 @@ static __poll_t ucube_lkm_poll(struct file *flip , struct poll_table_struct * po
         mask |= POLLIN | POLLRDNORM;
         return mask;
     }
-    if(minor == 4){
-        /* Readable once the R5 has rung since this file's last read() */
-        poll_wait(flip, &dev_data->ipi_wq, poll_struct);
-        if ((unsigned int)atomic_read(&dev_data->ipi_count) != (uintptr_t)flip->private_data)
+    if(ucube_minor_rpu(minor)){
+        /* Readable once this file's R5 has rung since its last read() */
+        struct ucube_rpu *r = ucube_minor_rpu(minor);
+
+        poll_wait(flip, &r->ipi_wq, poll_struct);
+        if ((unsigned int)atomic_read(&r->ipi_count) != (uintptr_t)flip->private_data)
             return POLLIN | POLLRDNORM;
     }
     return 0;
@@ -42,9 +44,9 @@ static int ucube_lkm_mmap(struct file *filp, struct vm_area_struct *vma){
     uint64_t mapping_limit_base_0, mapping_limit_top_0;
     uint64_t mapping_limit_base_1, mapping_limit_top_1;
 
-    /* The shared memory window has its own mapping rules */
-    if(minor == 4)
-        return ucube_shm_mmap(vma);
+    /* The shared memory windows have their own mapping rules */
+    if(ucube_minor_rpu(minor))
+        return ucube_shm_mmap(ucube_minor_rpu(minor), vma);
 
     if(dev_data->is_zynqmp){
         mapping_limit_base_0 = ZYNQMP_BUS_0_ADDRESS_BASE;
@@ -116,10 +118,10 @@ static long ucube_lkm_ioctl(struct file *filp, unsigned int cmd, unsigned long a
             break;
         }
         return 0;
-    } else if(minor == 4){
+    } else if(ucube_minor_rpu(minor)){
         switch (cmd){
         case IOCTL_RING_RPU:
-            return ucube_ipi_ring();
+            return ucube_ipi_ring(ucube_minor_rpu(minor));
         default:
             return -EINVAL;
         }
@@ -135,8 +137,10 @@ static int ucube_lkm_open(struct inode *inode, struct file *file) {
     pr_info("%s: In open\n", __func__);
 
     /* Shared memory: only doorbells arriving after open() count for this file */
-    if (MINOR(inode->i_rdev) == 4)
-        file->private_data = (void *)(uintptr_t)(unsigned int)atomic_read(&dev_data->ipi_count);
+    struct ucube_rpu *r = ucube_minor_rpu(MINOR(inode->i_rdev));
+
+    if (r)
+        file->private_data = (void *)(uintptr_t)(unsigned int)atomic_read(&r->ipi_count);
 
     return 0;
 }
@@ -175,22 +179,23 @@ static ssize_t ucube_lkm_read(
         result = ucube_fpga_loaded() ?'1' : '0';
         if (copy_to_user(buffer, &result, 1)) return -EFAULT;
         return 1;
-    } else if(minor == 4){
-        /* Wait for the R5 to ring; return how many doorbells arrived since the last read */
+    } else if(ucube_minor_rpu(minor)){
+        /* Wait for this file's R5 to ring; return how many doorbells arrived since the last read */
+        struct ucube_rpu *r = ucube_minor_rpu(minor);
         unsigned int seen = (uintptr_t)flip->private_data;
         unsigned int now;
         u32 n;
 
         if (count < sizeof(n))
             return -EINVAL;
-        if ((unsigned int)atomic_read(&dev_data->ipi_count) == seen) {
+        if ((unsigned int)atomic_read(&r->ipi_count) == seen) {
             if (flip->f_flags & O_NONBLOCK)
                 return -EAGAIN;
-            if (wait_event_interruptible(dev_data->ipi_wq,
-                    (unsigned int)atomic_read(&dev_data->ipi_count) != seen))
+            if (wait_event_interruptible(r->ipi_wq,
+                    (unsigned int)atomic_read(&r->ipi_count) != seen))
                 return -ERESTARTSYS;
         }
-        now = atomic_read(&dev_data->ipi_count);
+        now = atomic_read(&r->ipi_count);
         n = now - seen;
         flip->private_data = (void *)(uintptr_t)now;
         if (copy_to_user(buffer, &n, sizeof(n)))

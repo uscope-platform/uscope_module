@@ -15,41 +15,62 @@
  */
 
 /*
- * Shared memory window for exchanging data with other cores (e.g. the RPU).
+ * Shared memory windows for exchanging data with the RPU cores, one per core.
  *
- * The buffer is allocated at runtime from the DMA/CMA pool, so no device tree
- * carveout is needed. Its size is a module parameter, its physical address is
- * published in sysfs (shm_addr) and userspace maps it through /dev/uscope_shm.
+ * Each buffer is allocated at runtime from the DMA/CMA pool, so no device tree
+ * carveout is needed. The size is a module parameter (same for every core),
+ * the physical addresses are published in sysfs (shm_addr_<core>) and
+ * userspace maps a window through /dev/uscope_shm_<core>.
  */
 
 #include "ucube_lkm.h"
 
 static unsigned long shm_size = SZ_1M;
 module_param(shm_size, ulong, 0444);
-MODULE_PARM_DESC(shm_size, "Size in bytes of the shared memory window (default 1 MiB)");
+MODULE_PARM_DESC(shm_size, "Size in bytes of each core's shared memory window (default 1 MiB)");
 
-static ssize_t shm_addr_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-    return sysfs_emit(buf, "0x%llx\n", (unsigned long long)dev_data->shm_phys);
-}
+#define UCUBE_SHM_ATTRS(n)                                                              \
+static ssize_t shm_addr_##n##_show(struct device *dev, struct device_attribute *attr,  \
+                                   char *buf)                                           \
+{                                                                                       \
+    return sysfs_emit(buf, "0x%llx\n", (unsigned long long)dev_data->rpu[n].shm_phys);  \
+}                                                                                       \
+static ssize_t shm_size_##n##_show(struct device *dev, struct device_attribute *attr,  \
+                                   char *buf)                                           \
+{                                                                                       \
+    return sysfs_emit(buf, "%zu\n", dev_data->rpu[n].shm_size);                         \
+}                                                                                       \
+static DEVICE_ATTR_RO(shm_addr_##n);                                                    \
+static DEVICE_ATTR_RO(shm_size_##n)
 
-static ssize_t shm_size_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-    return sysfs_emit(buf, "%zu\n", dev_data->shm_size);
-}
-
-static DEVICE_ATTR_RO(shm_addr);
-static DEVICE_ATTR_RO(shm_size);
+UCUBE_SHM_ATTRS(0);
+UCUBE_SHM_ATTRS(1);
 
 static struct attribute *ucube_shm_attrs[] = {
-    &dev_attr_shm_addr.attr,
-    &dev_attr_shm_size.attr,
+    &dev_attr_shm_addr_0.attr,
+    &dev_attr_shm_size_0.attr,
+    &dev_attr_shm_addr_1.attr,
+    &dev_attr_shm_size_1.attr,
     NULL,
 };
 
 static const struct attribute_group ucube_shm_attr_group = {
     .attrs = ucube_shm_attrs,
 };
+
+static void ucube_shm_free_windows(struct device *dev)
+{
+    for (int i = 0; i < N_RPU_CORES; i++) {
+        struct ucube_rpu *r = &dev_data->rpu[i];
+
+        if (!r->shm_va)
+            continue;
+        dma_free_coherent(dev, r->shm_size, r->shm_va, r->shm_phys);
+        r->shm_va = NULL;
+        r->shm_phys = 0;
+        r->shm_size = 0;
+    }
+}
 
 int ucube_shm_alloc(struct device *dev)
 {
@@ -61,7 +82,7 @@ int ucube_shm_alloc(struct device *dev)
     shm_size = PAGE_ALIGN(shm_size);
 
     /*
-     * Keep the buffer below 4 GB. On ZynqMP the only DDR there is DDR_LOW
+     * Keep the buffers below 4 GB. On ZynqMP the only DDR there is DDR_LOW
      * (0 - 2 GB), which is the part the RPU can address.
      */
     rc = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32));
@@ -70,44 +91,48 @@ int ucube_shm_alloc(struct device *dev)
         return rc;
     }
 
-    dev_data->shm_va = dma_alloc_coherent(dev, shm_size, &dev_data->shm_phys, GFP_KERNEL);
-    if (!dev_data->shm_va) {
-        dev_err(dev, "%s: unable to allocate %lu bytes of shared memory\n", __func__, shm_size);
-        return -ENOMEM;
+    for (int i = 0; i < N_RPU_CORES; i++) {
+        struct ucube_rpu *r = &dev_data->rpu[i];
+
+        r->shm_va = dma_alloc_coherent(dev, shm_size, &r->shm_phys, GFP_KERNEL);
+        if (!r->shm_va) {
+            dev_err(dev, "%s: unable to allocate %lu bytes of shared memory for core %d\n",
+                    __func__, shm_size, i);
+            ucube_shm_free_windows(dev);
+            return -ENOMEM;
+        }
+        r->shm_size = shm_size;
+        dev_info(dev, "shared memory %d: %zu bytes at 0x%llx\n",
+                 i, r->shm_size, (unsigned long long)r->shm_phys);
     }
-    dev_data->shm_size = shm_size;
     dev_data->shm_dev = dev;
 
     rc = sysfs_create_group(&dev->kobj, &ucube_shm_attr_group);
     if (rc) {
-        ucube_shm_free(dev);
+        ucube_shm_free_windows(dev);
+        dev_data->shm_dev = NULL;
         return rc;
     }
 
-    dev_info(dev, "shared memory: %zu bytes at 0x%llx\n",
-             dev_data->shm_size, (unsigned long long)dev_data->shm_phys);
     return 0;
 }
 
 void ucube_shm_free(struct device *dev)
 {
-    if (!dev_data->shm_va)
+    if (!dev_data->shm_dev)
         return;
 
     sysfs_remove_group(&dev->kobj, &ucube_shm_attr_group);
-    dma_free_coherent(dev, dev_data->shm_size, dev_data->shm_va, dev_data->shm_phys);
-    dev_data->shm_va = NULL;
-    dev_data->shm_phys = 0;
-    dev_data->shm_size = 0;
+    ucube_shm_free_windows(dev);
     dev_data->shm_dev = NULL;
 }
 
-int ucube_shm_mmap(struct vm_area_struct *vma)
+int ucube_shm_mmap(struct ucube_rpu *r, struct vm_area_struct *vma)
 {
-    if (!dev_data->shm_va)
+    if (!r->shm_va)
         return -ENODEV;
 
     /* dma_mmap_coherent() checks vm_pgoff and the length against the buffer */
-    return dma_mmap_coherent(dev_data->shm_dev, vma, dev_data->shm_va,
-                             dev_data->shm_phys, dev_data->shm_size);
+    return dma_mmap_coherent(dev_data->shm_dev, vma, r->shm_va,
+                             r->shm_phys, r->shm_size);
 }

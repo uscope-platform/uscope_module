@@ -15,18 +15,21 @@
  */
 
 /*
- * IPI doorbell between Linux and the R5, through the kernel IPI mailbox driver
- * (ZynqMP IPI registers are only reachable from Linux through the secure
- * firmware, which that driver handles).
+ * IPI doorbells between Linux and the R5 cores, through the kernel IPI mailbox
+ * driver (ZynqMP IPI registers are only reachable from Linux through the secure
+ * firmware, which that driver handles). One doorbell per RPU core.
  *
- * Device tree, in the uScope node:
+ * Device tree, in the uScope node (APU IPI7 to RPU0 / RPU1):
  *   mboxes = <&{/axi/ipi@ff340000/child@ff310000} 0>,
- *            <&{/axi/ipi@ff340000/child@ff310000} 1>;
- *   mbox-names = "tx", "rx";
+ *            <&{/axi/ipi@ff340000/child@ff310000} 1>,
+ *            <&{/axi/ipi@ff340000/child@ff320000} 0>,
+ *            <&{/axi/ipi@ff340000/child@ff320000} 1>;
+ *   mbox-names = "tx_0", "rx_0", "tx_1", "rx_1";
+ * A core whose pair is missing simply has no doorbell.
  *
- * Userspace, on /dev/uscope_shm:
- *   ioctl(fd, IOCTL_RING_RPU)  ring the R5
- *   poll()/read()              wait for the R5 to ring back; read() returns a
+ * Userspace, on /dev/uscope_shm_<core>:
+ *   ioctl(fd, IOCTL_RING_RPU)  ring that R5
+ *   poll()/read()              wait for that R5 to ring back; read() returns a
  *                              u32 with the number of doorbells since last read
  */
 
@@ -35,61 +38,78 @@
 /* R5 rang: acknowledge (or the next doorbell never arrives) and wake readers */
 static void ucube_ipi_rx(struct mbox_client *cl, void *msg)
 {
-    if (mbox_send_message(dev_data->ipi_rx, NULL) < 0)
-        dev_err(cl->dev, "IPI ack failed\n");
+    struct ucube_rpu *r = container_of(cl, struct ucube_rpu, ipi_cl);
 
-    atomic_inc(&dev_data->ipi_count);
-    wake_up_interruptible(&dev_data->ipi_wq);
+    if (mbox_send_message(r->ipi_rx, NULL) < 0)
+        dev_err(cl->dev, "IPI %d ack failed\n", r->core);
+
+    atomic_inc(&r->ipi_count);
+    wake_up_interruptible(&r->ipi_wq);
 }
 
-void ucube_ipi_init(struct device *dev)
+static void ucube_ipi_init_core(struct device *dev, struct ucube_rpu *r)
 {
-    struct mbox_client *cl = &dev_data->ipi_cl;
+    struct mbox_client *cl = &r->ipi_cl;
+    char tx_name[8], rx_name[8];
 
-    if (!of_property_present(dev->of_node, "mbox-names"))
-        return;     /* no doorbell configured */
+    snprintf(tx_name, sizeof(tx_name), "tx_%d", r->core);
+    snprintf(rx_name, sizeof(rx_name), "rx_%d", r->core);
+
+    /* No pair for this core in the DT: it has no doorbell */
+    if (of_property_match_string(dev->of_node, "mbox-names", tx_name) < 0)
+        return;
 
     cl->dev = dev;
     cl->rx_callback = ucube_ipi_rx;
     cl->tx_block = false;
     cl->knows_txdone = false;
 
-    dev_data->ipi_tx = mbox_request_channel_byname(cl, "tx");
-    if (IS_ERR(dev_data->ipi_tx)) {
-        dev_err(dev, "IPI tx channel: %ld\n", PTR_ERR(dev_data->ipi_tx));
-        dev_data->ipi_tx = NULL;
+    r->ipi_tx = mbox_request_channel_byname(cl, tx_name);
+    if (IS_ERR(r->ipi_tx)) {
+        dev_err(dev, "IPI %s channel: %ld\n", tx_name, PTR_ERR(r->ipi_tx));
+        r->ipi_tx = NULL;
         return;
     }
 
-    dev_data->ipi_rx = mbox_request_channel_byname(cl, "rx");
-    if (IS_ERR(dev_data->ipi_rx)) {
-        dev_err(dev, "IPI rx channel: %ld\n", PTR_ERR(dev_data->ipi_rx));
-        dev_data->ipi_rx = NULL;
-        mbox_free_channel(dev_data->ipi_tx);
-        dev_data->ipi_tx = NULL;
+    r->ipi_rx = mbox_request_channel_byname(cl, rx_name);
+    if (IS_ERR(r->ipi_rx)) {
+        dev_err(dev, "IPI %s channel: %ld\n", rx_name, PTR_ERR(r->ipi_rx));
+        r->ipi_rx = NULL;
+        mbox_free_channel(r->ipi_tx);
+        r->ipi_tx = NULL;
         return;
     }
 
-    dev_info(dev, "IPI doorbell ready\n");
+    dev_info(dev, "IPI doorbell %d ready\n", r->core);
+}
+
+void ucube_ipi_init(struct device *dev)
+{
+    for (int i = 0; i < N_RPU_CORES; i++)
+        ucube_ipi_init_core(dev, &dev_data->rpu[i]);
 }
 
 void ucube_ipi_free(void)
 {
-    if (dev_data->ipi_rx)
-        mbox_free_channel(dev_data->ipi_rx);
-    if (dev_data->ipi_tx)
-        mbox_free_channel(dev_data->ipi_tx);
-    dev_data->ipi_rx = NULL;
-    dev_data->ipi_tx = NULL;
+    for (int i = 0; i < N_RPU_CORES; i++) {
+        struct ucube_rpu *r = &dev_data->rpu[i];
+
+        if (r->ipi_rx)
+            mbox_free_channel(r->ipi_rx);
+        if (r->ipi_tx)
+            mbox_free_channel(r->ipi_tx);
+        r->ipi_rx = NULL;
+        r->ipi_tx = NULL;
+    }
 }
 
-int ucube_ipi_ring(void)
+int ucube_ipi_ring(struct ucube_rpu *r)
 {
     int rc;
 
-    if (!dev_data->ipi_tx)
+    if (!r->ipi_tx)
         return -ENODEV;
 
-    rc = mbox_send_message(dev_data->ipi_tx, NULL);
+    rc = mbox_send_message(r->ipi_tx, NULL);
     return rc < 0 ? rc : 0;
 }
