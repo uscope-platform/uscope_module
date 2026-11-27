@@ -41,7 +41,7 @@
 static unsigned long shm_size = SZ_1M;
 module_param(shm_size, ulong, 0444);
 MODULE_PARM_DESC(shm_size, "Size in bytes of each core's shared memory window "
-                 "(power of two, page size to 1 MiB; default 1 MiB)");
+                 "(power of two, 16 KiB to 1 MiB; default 1 MiB)");
 
 /*
  * The R5 maps its window with one MPU region, which must be a power of two
@@ -50,6 +50,12 @@ MODULE_PARM_DESC(shm_size, "Size in bytes of each core's shared memory window "
  * window is capped at 1 MiB.
  */
 #define SHM_SIZE_MAX    SZ_1M
+
+/*
+ * The firmware keeps its log in the last 8 KiB of the window and wants at
+ * least as much again for the application (SHM_MIN_SIZE in its shm.h).
+ */
+#define SHM_SIZE_MIN    SZ_16K
 
 #define UCUBE_SHM_ATTRS(n)                                                              \
 static ssize_t shm_addr_##n##_show(struct device *dev, struct device_attribute *attr,  \
@@ -102,12 +108,12 @@ int ucube_shm_alloc(struct device *dev)
     if (!shm_size)
         return 0;   /* shared memory disabled */
 
-    if (shm_size < PAGE_SIZE || shm_size > SHM_SIZE_MAX || !is_power_of_2(shm_size)) {
+    if (shm_size < SHM_SIZE_MIN || shm_size > SHM_SIZE_MAX || !is_power_of_2(shm_size)) {
         unsigned long fixed = clamp_t(unsigned long, roundup_pow_of_two(shm_size),
-                                      PAGE_SIZE, SHM_SIZE_MAX);
+                                      SHM_SIZE_MIN, SHM_SIZE_MAX);
 
         dev_warn(dev, "shm_size %lu: must be a power of two from %lu to %lu, using %lu\n",
-                 shm_size, PAGE_SIZE, (unsigned long)SHM_SIZE_MAX, fixed);
+                 shm_size, (unsigned long)SHM_SIZE_MIN, (unsigned long)SHM_SIZE_MAX, fixed);
         shm_size = fixed;
     }
 
