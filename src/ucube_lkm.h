@@ -94,6 +94,24 @@ struct ucube_fclk {
     struct device_attribute en_attr;
 };
 
+/*
+ * Shared memory mailbox: the last 12 bytes of each R5 core's 64 KB BTCM (split
+ * mode), where the firmware learns its window. Must match struct shm_mailbox
+ * in the firmware (uscope_firmware src/hal/shm.h):
+ *   +0 magic  written by the firmware: RPU_SHM_MAILBOX_MAGIC = has a mailbox
+ *   +4 addr   written by Linux, last: window physical address
+ *   +8 size   written by Linux, before addr: window size in bytes
+ */
+#define RPU_SHM_MAILBOX_MAGIC       0x55534D42U     /* "USMB" */
+#define RPU_SHM_MAILBOX_OFFSET      0xFFF4          /* from the core's BTCM base */
+#define RPU_SHM_MAILBOX_LEN         12
+#define RPU_SHM_MAILBOX_MAGIC_REG   0
+#define RPU_SHM_MAILBOX_ADDR_REG    4
+#define RPU_SHM_MAILBOX_SIZE_REG    8
+/* Global address of each core's BTCM */
+#define RPU0_BTCM_BASE              0xFFE20000UL
+#define RPU1_BTCM_BASE              0xFFEB0000UL
+
 /* Per RPU core: shared memory window and IPI doorbell (ucube_lkm_shm.c, ucube_lkm_ipi.c) */
 struct ucube_rpu {
     int core;
@@ -101,6 +119,7 @@ struct ucube_rpu {
     void *shm_va;
     dma_addr_t shm_phys;
     size_t shm_size;
+    void __iomem *shm_mailbox;  /* mailbox in the core's TCM, NULL if not mapped */
     /* IPI doorbell, DT mailboxes "tx_<core>" / "rx_<core>" */
     struct mbox_client ipi_cl;
     struct mbox_chan *ipi_tx;
@@ -166,6 +185,8 @@ void ucube_rpu_clk_add_files(struct device *dev, struct ucube_fclk *f);
 int ucube_shm_alloc(struct device *dev);
 void ucube_shm_free(struct device *dev);
 int ucube_shm_mmap(struct ucube_rpu *r, struct vm_area_struct *vma);
+void ucube_shm_map_mailbox(struct device *dev, struct ucube_rpu *r);
+bool ucube_shm_announce(struct ucube_rpu *r);
 
 /* IPI doorbell */
 void ucube_ipi_init(struct device *dev);

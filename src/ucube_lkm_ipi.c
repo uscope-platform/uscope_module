@@ -43,6 +43,10 @@ static void ucube_ipi_rx(struct mbox_client *cl, void *msg)
     if (mbox_send_message(r->ipi_rx, NULL) < 0)
         dev_err(cl->dev, "IPI %d ack failed\n", r->core);
 
+    /* The firmware asking for its shared memory window: answered here */
+    if (ucube_shm_announce(r))
+        return;
+
     atomic_inc(&r->ipi_count);
     wake_up_interruptible(&r->ipi_wq);
 }
@@ -81,6 +85,16 @@ static void ucube_ipi_init_core(struct device *dev, struct ucube_rpu *r)
     }
 
     dev_info(dev, "IPI doorbell %d ready\n", r->core);
+
+    /*
+     * Tell a core that is already running about its (new) shared memory
+     * window: it rings back, and the receive callback announces the window.
+     * A core that is not running just finds a stale doorbell when it starts,
+     * which the firmware discards.
+     */
+    ucube_shm_map_mailbox(dev, r);
+    if (r->shm_mailbox)
+        ucube_ipi_ring(r);
 }
 
 void ucube_ipi_init(struct device *dev)
